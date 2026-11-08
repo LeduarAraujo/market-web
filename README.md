@@ -10,7 +10,10 @@ stash e moedas são lidas localmente.
 
 - Windows com uma instalação funcional do SPT 4.1.6.
 - Node.js 20.9 ou superior e npm.
-- .NET SDK 10 somente se for necessário compilar ou reinstalar o conector.
+- O conector pré-compilado incluído neste projeto é opcional para as telas de
+  leitura; instale-o somente para habilitar a comunicação com o servidor SPT.
+- .NET SDK 10 somente se quiser recompilar o conector em vez de usar a DLL
+  incluída.
 
 ### 1. Baixe o projeto e instale as dependências
 
@@ -65,25 +68,50 @@ partir do perfil local. Use o botão de atualizar do inventário para reler os
 dados. Se você acabou de jogar, atualize após encerrar ou salvar a sessão para
 consultar o perfil atualizado.
 
-### 5. Conector do servidor (opcional)
+### 5. Instale o conector do servidor (opcional)
 
-A leitura de perfil, stash e moedas funciona diretamente pelos arquivos locais
-do SPT. O conector é um mod separado, necessário para as operações que dependem
-do servidor. Para compilar contra a instalação local do SPT:
+A leitura de perfil, stash e moedas funciona sem instalar mods. Para a
+integração com o servidor, este projeto inclui o mod pré-compilado em
+`connector\release\SptMarketConnector\SptMarketConnector.dll`. Ele foi
+compilado para SPT 4.1.6. Siga os passos:
+
+1. Pare o servidor SPT antes de instalar ou substituir o mod. Não é necessário
+   alterar os arquivos do cliente/jogo.
+2. No PowerShell aberto na pasta `market-web`, informe a raiz da instalação do
+   SPT e copie a DLL:
+
+```powershell
+$sptRoot = 'D:\SPT'
+$modsPath = Join-Path $sptRoot 'SPT_Runtime\user\mods\SptMarketConnector'
+New-Item -ItemType Directory -Path $modsPath -Force | Out-Null
+Copy-Item -LiteralPath '.\connector\release\SptMarketConnector\SptMarketConnector.dll' `
+  -Destination (Join-Path $modsPath 'SptMarketConnector.dll') -Force
+```
+
+Se o SPT estiver em outro local, substitua `D:\SPT` pelo caminho que contém a
+pasta `SPT_Runtime`. Inicie o servidor SPT novamente: ele detecta o mod ao
+iniciar. Confira no log do servidor a mensagem de carregamento do **SPT Market
+Connector** e, com o painel aberto, confirme que o estado aparece como
+**CONECTOR ONLINE**. Operações que dependem do PMC também exigem que o
+personagem esteja carregado no servidor.
+
+> A única alteração necessária na instalação do SPT é adicionar essa DLL à
+> pasta de mods do servidor. Não copie o conector para pastas do cliente/jogo.
+
+#### Recompilar o conector (opcional)
+
+A DLL incluída já está pronta para instalar no SPT 4.1.6; não é necessário
+instalar o .NET SDK para seguir o tutorial acima. Se quiser compilar a partir
+do código-fonte em `connector\`, instale o .NET SDK 10 e execute na raiz do
+projeto:
 
 ```powershell
 dotnet build .\connector\SptMarketConnector.csproj -p:SPTRoot="D:\SPT"
 ```
 
-Substitua `D:\SPT` pela raiz real do SPT. Copie
-`connector\bin\Debug\net10.0\SptMarketConnector.dll` para
-`SPT_Runtime\user\mods\SptMarketConnector\SptMarketConnector.dll` (crie a pasta
-se necessário) e reinicie o servidor SPT para carregar o mod. Confirme no
-painel que o estado do conector está online. Operações que dependem do PMC
-também exigem que o personagem esteja carregado no servidor.
-
-> Não copie arquivos de build para o jogo enquanto o servidor estiver ativo.
-> A instalação do conector não é necessária para executar as telas de leitura.
+Substitua `D:\SPT` pela raiz do seu SPT. A DLL recompilada será gerada em
+`connector\bin\Debug\net10.0\SptMarketConnector.dll`; instale-a na pasta de
+mods usando o mesmo procedimento acima.
 
 ### Solução de problemas
 
@@ -93,6 +121,8 @@ também exigem que o personagem esteja carregado no servidor.
   permissão para ler a pasta de perfis e os dados do SPT.
 - **Conector offline:** confira a instalação do mod, reinicie o servidor SPT e
   consulte `GET /api/health`.
+- **Erro ao copiar a DLL:** confirme que o servidor foi encerrado e que `$sptRoot`
+  aponta para a pasta correta, aquela que contém `SPT_Runtime`.
 - **PMC não carregado ou resposta vazia:** entre no jogo com o personagem para
   carregar a sessão no servidor e tente novamente.
 - **Dependências ou build desatualizados:** execute `npm ci`; em seguida, use
