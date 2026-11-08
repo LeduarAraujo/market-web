@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+connector/bin/
+connector/obj/
+.dotnet/
+.env*
+!.env.example
+npm-debug.log*
