@@ -60,7 +60,6 @@ const currenciesByTemplate: Record<string, { label: string; symbol: string }> = 
 };
 
 const screens: Array<{ id: Screen; label: string; short: string }> = [
-  { id: "characters", label: "PERSONAGENS", short: "CH" },
   { id: "stash", label: "STASH", short: "ST" },
   { id: "flea", label: "FLEA MARKET", short: "FM" },
   { id: "traders", label: "TRADERS", short: "TR" },
