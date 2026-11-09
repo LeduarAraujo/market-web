@@ -143,6 +143,13 @@ mods usando o mesmo procedimento acima.
 - **Busca no flea e compra de ofertas em moeda:** enviadas ao servidor pelo
   conector. Cada compra exige confirmação explícita, usa os stacks da moeda do
   perfil para compor o pagamento e é validada pelo próprio SPT.
+- A busca permite limitar a condição entre 0% e 100%. Itens médicos mostram o
+  recurso restante e o total, por exemplo `140/400 (35%)`.
+- A quantidade anunciada por oferta usa o total retornado pelo servidor SPT,
+  incluindo múltiplas unidades do mesmo item em um anúncio.
+- Ofertas de comerciantes ainda indisponíveis são lidas dos assorts locais e
+  exibidas como bloqueadas, com o requisito de nível ou missão; elas não podem
+  ser compradas pelo painel.
 - **Anúncios, ofertas próprias, trocas por itens e transações com comerciantes:**
   ainda não estão disponíveis na interface.
 - O painel não exibe ofertas fictícias nem escreve diretamente nos arquivos de
@@ -165,6 +172,8 @@ mods usando o mesmo procedimento acima.
 - `GET /api/profiles/{profileId}/traders` — reputação e nível de lealdade.
 - `GET /api/market/catalog` — categorias, subcategorias e itens do handbook SPT.
 - `POST /api/market/search` — busca real de ofertas de um item no servidor SPT.
+- `GET /api/market/locked-offers?templateId={id}` — ofertas de comerciantes
+  bloqueadas para o perfil selecionado, derivadas dos assorts locais.
 - `POST /api/market/buy` — compra confirmada de uma oferta paga em rublos,
   dólares ou euros.
 - `POST /api/market/{operation}` — proxy local para operações do conector.

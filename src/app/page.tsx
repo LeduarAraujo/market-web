@@ -31,6 +31,8 @@ type FleaOfferView = {
   sellerIsTrader: boolean;
   rating: number | null;
   conditionPercent: number | null;
+  conditionValue: number | null;
+  conditionMaximum: number | null;
   foundInRaid: boolean;
   price: number | null;
   currencyTemplateId: string | null;
@@ -40,6 +42,15 @@ type FleaOfferView = {
   traderLimit: number | null;
   loyaltyLevel: number | null;
   locked: boolean;
+  lockedReason: string | null;
+};
+
+type FleaSearchOptions = {
+  ownerType?: number;
+  excludeBartering?: boolean;
+  sort?: string;
+  conditionFrom?: number;
+  conditionTo?: number;
 };
 
 const currenciesByTemplate: Record<string, { label: string; symbol: string }> = {
@@ -118,8 +129,12 @@ function normalizeFleaOffer(
   const item = catalogItems.get(itemId);
   const rootUpd = rootItem ? asRecord(rootItem.upd) ?? asRecord(rootItem.Upd) : null;
   const repairable = rootUpd ? asRecord(rootUpd.Repairable) ?? asRecord(rootUpd.repairable) : null;
+  const medKit = rootUpd ? asRecord(rootUpd.MedKit) ?? asRecord(rootUpd.medKit) : null;
   const durability = repairable ? firstNumber(repairable, "Durability") : null;
   const maxDurability = repairable ? firstNumber(repairable, "MaxDurability") : null;
+  const hpResource = medKit ? firstNumber(medKit, "HpResource") : null;
+  const conditionValue = durability ?? hpResource;
+  const conditionMaximum = maxDurability ?? (hpResource !== null ? item?.conditionMax ?? null : null);
   const user = asRecord(offer.user) ?? asRecord(offer.User) ?? {};
   const traderIds = [
     firstString(offer, "traderId", "TraderId", "ownerId", "OwnerId", "userId", "UserId"),
@@ -165,18 +180,20 @@ function normalizeFleaOffer(
     itemName: item?.name || firstString(rootItem ?? {}, "name", "Name") || "Item",
     itemCount: Math.max(
       1,
-      firstNumber(rootUpd ?? {}, "StackObjectsCount") ??
+      firstNumber(offer, "quantity", "Quantity", "count", "Count") ??
+        firstNumber(rootUpd ?? {}, "StackObjectsCount") ??
         firstNumber(rootItem ?? {}, "count", "Count") ??
-        firstNumber(offer, "quantity", "count") ??
         1,
     ),
     seller: sellerName,
     sellerIsTrader,
     rating: firstNumber(user, "rating", "Rating"),
     conditionPercent:
-      durability !== null && maxDurability !== null && maxDurability > 0
-        ? Math.min(100, Math.max(0, Math.round((durability / maxDurability) * 100)))
+      conditionValue !== null && conditionMaximum !== null && conditionMaximum > 0
+        ? Math.min(100, Math.max(0, Math.round((conditionValue / conditionMaximum) * 100)))
         : null,
+    conditionValue,
+    conditionMaximum,
     foundInRaid: Boolean(rootUpd?.SpawnedInSession ?? rootUpd?.spawnedInSession ?? false),
     price,
     currencyTemplateId: currency ? currencyTemplateId : null,
@@ -193,6 +210,7 @@ function normalizeFleaOffer(
     traderLimit,
     loyaltyLevel,
     locked: Boolean(offer.locked ?? offer.isLocked ?? false),
+    lockedReason: firstString(offer, "lockedReason", "LockedReason") || null,
   };
 }
 
@@ -223,11 +241,14 @@ export default function Home() {
   const [fleaClock, setFleaClock] = useState(Date.now());
   const [fleaOffersLoading, setFleaOffersLoading] = useState(false);
   const [fleaOfferCount, setFleaOfferCount] = useState<number | null>(null);
+  const [lockedTraderOfferCount, setLockedTraderOfferCount] = useState(0);
   const [fleaPage, setFleaPage] = useState(0);
   const [fleaHasMore, setFleaHasMore] = useState(false);
   const [fleaOwnerType, setFleaOwnerType] = useState(0);
   const [excludeBartering, setExcludeBartering] = useState(true);
   const [fleaSort, setFleaSort] = useState("price-asc");
+  const [fleaConditionFrom, setFleaConditionFrom] = useState(0);
+  const [fleaConditionTo, setFleaConditionTo] = useState(100);
   const [purchaseOffer, setPurchaseOffer] = useState<FleaOfferView | null>(null);
   const [purchasingOffer, setPurchasingOffer] = useState(false);
   const [screen, setScreen] = useState<Screen>("characters");
@@ -399,12 +420,22 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [fleaOffers.length]);
 
-  async function searchFleaOffers(item: FleaCatalogItem, page = 0, append = false) {
+  async function searchFleaOffers(
+    item: FleaCatalogItem,
+    page = 0,
+    append = false,
+    options: FleaSearchOptions = {},
+  ) {
     if (!profileId) {
       setError("Selecione um personagem antes de pesquisar no flea.");
       return;
     }
 
+    const ownerType = options.ownerType ?? fleaOwnerType;
+    const excludeBarteringOffers = options.excludeBartering ?? excludeBartering;
+    const sort = options.sort ?? fleaSort;
+    const conditionFrom = options.conditionFrom ?? fleaConditionFrom;
+    const conditionTo = options.conditionTo ?? fleaConditionTo;
     setSelectedFleaItem(item);
     setFleaCategoryId(item.categoryId);
     setFleaOffersLoading(true);
@@ -413,6 +444,7 @@ export default function Home() {
     if (!append) {
       setFleaOffers([]);
       setFleaOfferCount(null);
+      setLockedTraderOfferCount(0);
     }
 
     try {
@@ -424,19 +456,19 @@ export default function Home() {
             page,
             pageId: page,
             limit: 100,
-            sortType: fleaSort === "expiry" ? 5 : 4,
-            sortDirection: fleaSort === "price-desc" ? 1 : 0,
+            sortType: sort === "expiry" ? 5 : 4,
+            sortDirection: sort === "price-desc" ? 1 : 0,
             currency: 0,
             priceFrom: 0,
             priceTo: 999999999,
             quantityFrom: 1,
             quantityTo: 999999,
-            conditionFrom: 0,
-            conditionTo: 100,
+            conditionFrom,
+            conditionTo,
             oneHourExpiration: false,
             oneHourExpire: false,
-            removeBartering: excludeBartering,
-            offerOwnerType: fleaOwnerType,
+            removeBartering: excludeBarteringOffers,
+            offerOwnerType: ownerType,
             onlyFunctional: false,
             updateOfferCount: true,
             handbookId: item.id,
@@ -460,15 +492,47 @@ export default function Home() {
       const offers = searchResult.offers.map((offer) =>
         normalizeFleaOffer(offer, fleaItemsById, traders),
       );
-      setFleaOffers((current) => (append ? [...current, ...offers] : offers));
+      let lockedOffers: FleaOfferView[] = [];
+      if (!append && page === 0 && ownerType !== 2) {
+        const lockedResponse = await fetch(
+          `/api/market/locked-offers?templateId=${encodeURIComponent(item.id)}`,
+          { cache: "no-store" },
+        );
+        const lockedResult: unknown = await lockedResponse.json();
+        if (!lockedResponse.ok) {
+          const details = asRecord(lockedResult);
+          throw new Error(
+            firstString(details ?? {}, "message", "error") ||
+              "Não foi possível consultar as ofertas bloqueadas dos comerciantes.",
+          );
+        }
+
+        const lockedData = asRecord(lockedResult);
+        const rawLockedOffers = Array.isArray(lockedData?.offers)
+          ? lockedData.offers
+              .map(asRecord)
+              .filter((offer): offer is Record<string, unknown> => offer !== null)
+          : [];
+        lockedOffers = rawLockedOffers
+          .map((offer) => normalizeFleaOffer(offer, fleaItemsById, traders));
+        lockedOffers = lockedOffers.filter(
+          (offer) =>
+            offer.conditionPercent === null ||
+            (offer.conditionPercent >= conditionFrom && offer.conditionPercent <= conditionTo),
+        );
+      }
+
+      const allOffers = [...offers, ...lockedOffers];
+      setFleaOffers((current) => (append ? [...current, ...offers] : allOffers));
       setFleaPage(page);
       setFleaOfferCount(searchResult.count);
+      if (!append) setLockedTraderOfferCount(lockedOffers.length);
       setFleaHasMore(
         searchResult.count !== null
           ? (page + 1) * 100 < searchResult.count
           : offers.length === 100,
       );
-      if (offers.length === 0 && !append) {
+      if (allOffers.length === 0 && !append) {
         setNotice("Nenhuma oferta encontrada para este item com os filtros atuais.");
       }
     } catch (cause) {
@@ -935,7 +999,7 @@ export default function Home() {
                             }}
                           />
                         </span>
-                        <span><strong>{selectedFleaItem.name}</strong><small>OFERTAS DO SERVIDOR SPT</small></span>
+                        <span><strong>{selectedFleaItem.name}</strong><small>OFERTAS SPT E TRADERS BLOQUEADOS</small></span>
                       </>
                     ) : (
                       <span className="offers-prompt">Selecione um item para consultar as ofertas</span>
@@ -955,7 +1019,13 @@ export default function Home() {
                     <select
                       className="select-field"
                       value={fleaOwnerType}
-                      onChange={(event) => setFleaOwnerType(Number(event.target.value))}
+                      onChange={(event) => {
+                        const ownerType = Number(event.target.value);
+                        setFleaOwnerType(ownerType);
+                        if (selectedFleaItem) {
+                          void searchFleaOffers(selectedFleaItem, 0, false, { ownerType });
+                        }
+                      }}
                     >
                       <option value={0}>Todos</option>
                       <option value={2}>Jogadores</option>
@@ -966,33 +1036,117 @@ export default function Home() {
                     <input
                       type="checkbox"
                       checked={excludeBartering}
-                      onChange={(event) => setExcludeBartering(event.target.checked)}
+                      onChange={(event) => {
+                        const excludeBartering = event.target.checked;
+                        setExcludeBartering(excludeBartering);
+                        if (selectedFleaItem) {
+                          void searchFleaOffers(selectedFleaItem, 0, false, { excludeBartering });
+                        }
+                      }}
                     />
                     Excluir trocas
                   </label>
                   <label>
                     ORDENAR
-                    <select className="select-field" value={fleaSort} onChange={(event) => setFleaSort(event.target.value)}>
+                    <select
+                      className="select-field"
+                      value={fleaSort}
+                      onChange={(event) => {
+                        const sort = event.target.value;
+                        setFleaSort(sort);
+                        if (selectedFleaItem) {
+                          void searchFleaOffers(selectedFleaItem, 0, false, { sort });
+                        }
+                      }}
+                    >
                       <option value="price-asc">Menor preço</option>
                       <option value="price-desc">Maior preço</option>
                       <option value="expiry">Expiração</option>
                     </select>
                   </label>
-                  {selectedFleaItem && (
-                    <button
-                      className="filter-apply"
-                      onClick={() => void searchFleaOffers(selectedFleaItem)}
-                      disabled={fleaOffersLoading}
-                    >
-                      APLICAR
-                    </button>
-                  )}
+                  <div className="condition-filter" role="group" aria-label="Filtrar por condição do item">
+                    <span>CONDIÇÃO</span>
+                    <label>
+                      <span>DE</span>
+                      <input
+                        aria-label="Condição mínima"
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={fleaConditionFrom}
+                        onFocus={(event) => event.currentTarget.select()}
+                        onKeyDown={(event) => {
+                          const input = event.currentTarget;
+                          if (
+                            /^\d$/.test(event.key) &&
+                            input.value === "0" &&
+                            (input.selectionStart !== 0 || input.selectionEnd !== input.value.length)
+                          ) {
+                            input.select();
+                          }
+                        }}
+                        onChange={(event) => {
+                          const enteredValue = event.target.value.replace(/\D/g, "");
+                          const conditionFrom = Math.min(100, Math.max(0, Number(enteredValue || 0)));
+                          const conditionTo = Math.max(fleaConditionTo, conditionFrom);
+                          setFleaConditionFrom(conditionFrom);
+                          setFleaConditionTo(conditionTo);
+                          if (selectedFleaItem) {
+                            void searchFleaOffers(selectedFleaItem, 0, false, {
+                              conditionFrom,
+                              conditionTo,
+                            });
+                          }
+                        }}
+                      />
+                      <span>%</span>
+                    </label>
+                    <label>
+                      <span>ATÉ</span>
+                      <input
+                        aria-label="Condição máxima"
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={fleaConditionTo}
+                        onFocus={(event) => event.currentTarget.select()}
+                        onKeyDown={(event) => {
+                          const input = event.currentTarget;
+                          if (
+                            /^\d$/.test(event.key) &&
+                            input.value === "0" &&
+                            (input.selectionStart !== 0 || input.selectionEnd !== input.value.length)
+                          ) {
+                            input.select();
+                          }
+                        }}
+                        onChange={(event) => {
+                          const enteredValue = event.target.value.replace(/\D/g, "");
+                          const conditionTo = Math.min(100, Math.max(0, Number(enteredValue || 0)));
+                          const conditionFrom = Math.min(fleaConditionFrom, conditionTo);
+                          setFleaConditionFrom(conditionFrom);
+                          setFleaConditionTo(conditionTo);
+                          if (selectedFleaItem) {
+                            void searchFleaOffers(selectedFleaItem, 0, false, {
+                              conditionFrom,
+                              conditionTo,
+                            });
+                          }
+                        }}
+                      />
+                      <span>%</span>
+                    </label>
+                  </div>
                 </div>
                 <div className="offers-summary">
                   {selectedFleaItem
                     ? error
                       ? "BUSCA NÃO CONCLUÍDA"
-                      : `${fleaOfferCount === null ? fleaOffers.length : formatNumber(fleaOfferCount)} OFERTAS`
+                      : `${formatNumber(
+                          fleaOfferCount === null
+                            ? fleaOffers.length
+                            : fleaOfferCount + lockedTraderOfferCount,
+                        )} OFERTAS${lockedTraderOfferCount > 0 ? ` · ${formatNumber(lockedTraderOfferCount)} BLOQUEADAS` : ""}`
                     : "AGUARDANDO ITEM"}
                 </div>
                 <div className="offers-list">
@@ -1038,7 +1192,13 @@ export default function Home() {
                             <strong>{offer.itemName}</strong>
                             <span>Quantidade: {formatNumber(offer.itemCount)}</span>
                             {offer.conditionPercent !== null ? (
-                              <span>Condição: {offer.conditionPercent}%</span>
+                              <span>
+                                Condição:{" "}
+                                {offer.conditionValue !== null && offer.conditionMaximum !== null
+                                  ? `${formatNumber(offer.conditionValue)}/${formatNumber(offer.conditionMaximum)} · `
+                                  : ""}
+                                {offer.conditionPercent}%
+                              </span>
                             ) : offer.foundInRaid ? (
                               <span className="found-in-raid">ENCONTRADO EM RAID</span>
                             ) : (
@@ -1047,6 +1207,7 @@ export default function Home() {
                             {offer.barterItems.length > 0 && (
                               <span className="barter-details">Troca: {offer.barterItems.join(" + ")}</span>
                             )}
+                            {offer.lockedReason && <span className="barter-details">{offer.lockedReason}</span>}
                           </div>
                           <div className="offer-seller">
                             <strong>{offer.seller}</strong>
@@ -1096,7 +1257,7 @@ export default function Home() {
                   )}
                 </div>
                 <div className="panel-footer">
-                  <span><i className="status-dot" /> OFERTAS RECEBIDAS DO SERVIDOR SPT</span>
+                  <span><i className="status-dot" /> OFERTAS DO SPT{lockedTraderOfferCount > 0 ? " E ASSORT BLOQUEADO" : ""}</span>
                   <span>{selectedFleaItem ? `${formatNumber(fleaOffers.length)} CARREGADAS` : "SOMENTE OFERTAS REAIS"}</span>
                 </div>
               </div>

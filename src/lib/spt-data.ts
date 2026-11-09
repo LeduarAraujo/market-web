@@ -66,6 +66,7 @@ export type FleaCatalogItem = {
   name: string;
   shortName: string;
   categoryId: string;
+  conditionMax: number | null;
 };
 
 export type FleaCatalog = {
@@ -76,6 +77,25 @@ export type FleaCatalog = {
 export type RagfairPaymentItem = {
   id: string;
   count: number;
+};
+
+export type LockedTraderOffer = {
+  _id: string;
+  root: string;
+  items: Array<{
+    _id: string;
+    _tpl: string;
+    upd: {
+      StackObjectsCount: number;
+      MedKit?: { HpResource: number };
+    };
+  }>;
+  user: { id: string; nickname: string; memberType: number };
+  requirements: Array<{ _tpl: string; count: number }>;
+  loyaltyLevel: number;
+  buyRestrictionMax: number | null;
+  locked: true;
+  lockedReason: string;
 };
 
 type RawProfile = {
@@ -100,6 +120,7 @@ type RawProfile = {
         string,
         { loyaltyLevel?: number; standing?: number; unlocked?: boolean; disabled?: boolean }
       >;
+      Quests?: Array<{ qid?: string; status?: number }>;
     };
   };
 };
@@ -112,14 +133,37 @@ type RawTemplate = {
     Width?: number;
     Height?: number;
     StackMaxSize?: number;
+    CanSellOnRagfair?: boolean;
+    MaxHpResource?: number;
   };
 };
 
 type RawTrader = {
   nickname?: string;
-  surname?: string;
   unlockedByDefault?: boolean;
   loyaltyLevels?: unknown[];
+};
+
+type RawTraderAssortItem = {
+  _id?: string;
+  _tpl?: string;
+  parentId?: string;
+  slotId?: string;
+  upd?: {
+    BuyRestrictionMax?: number;
+    StackObjectsCount?: number;
+  };
+};
+
+type RawTraderAssort = {
+  items?: RawTraderAssortItem[];
+  barter_scheme?: Record<string, Array<Array<{ _tpl?: string; count?: number }>>>;
+  loyal_level_items?: Record<string, number>;
+};
+
+type RawTraderQuestAssort = {
+  started?: Record<string, string>;
+  success?: Record<string, string>;
 };
 
 type RawTraderSettings = RawTrader & {
@@ -144,9 +188,21 @@ type SptResponse = {
 };
 
 const profileIdPattern = /^[a-f\d]{24}$/i;
+const englishTraderNames: Record<string, string> = {
+  "656f0f98d80a697f855d34b1": "BTR",
+};
 const itemTemplatesCache = new Map<string, RawTemplate>();
 let localeCache: Record<string, string> | undefined;
 let fleaCatalogCache: Promise<FleaCatalog> | undefined;
+
+function getEnglishTraderName(id: string, nickname: string | undefined, fallback = "") {
+  const knownName = englishTraderNames[id.toLowerCase()];
+  if (knownName) return knownName;
+
+  const name = nickname?.trim() || fallback.trim();
+  if (!name) return "";
+  return `${name[0].toLocaleUpperCase("en")}${name.slice(1)}`;
+}
 
 function getSptPaths() {
   const root = path.resolve(process.env.SPT_ROOT ?? path.resolve(process.cwd(), ".."));
@@ -166,6 +222,17 @@ function getSptPaths() {
 async function readJson<T>(filePath: string): Promise<T> {
   const text = await readFile(filePath, "utf8");
   return JSON.parse(text) as T;
+}
+
+async function readOptionalJson<T>(filePath: string, fallback: T): Promise<T> {
+  try {
+    return await readJson<T>(filePath);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && String(error.code) === "ENOENT") {
+      return fallback;
+    }
+    throw error;
+  }
 }
 
 async function readProfileFile(profileId: string): Promise<RawProfile> {
@@ -258,6 +325,10 @@ export async function getFleaCatalog(): Promise<FleaCatalog> {
           name: name.replaceAll("_", " "),
           shortName: (locale[`${item.Id} ShortName`] ?? name).replaceAll("_", " "),
           categoryId: item.ParentId,
+          conditionMax:
+            typeof template?._props?.MaxHpResource === "number"
+              ? template._props.MaxHpResource
+              : null,
         } satisfies FleaCatalogItem;
       })
       .sort((left, right) => left.name.localeCompare(right.name));
@@ -513,14 +584,12 @@ export async function getTraders(profileId: string): Promise<TraderSummary[]> {
       const id = entry.name;
       const trader = await readJson<RawTrader>(path.join(tradersPath, id, "base.json"));
       const state = traderState[id];
+      const nickname = getEnglishTraderName(id, trader.nickname);
 
       return {
         id,
-        nickname: trader.nickname ?? "",
-        name:
-          trader.nickname === trader.surname
-            ? trader.nickname ?? ""
-            : [trader.nickname, trader.surname].filter(Boolean).join(" "),
+        nickname,
+        name: nickname,
         loyaltyLevel: Number(state?.loyaltyLevel ?? 0),
         standing: Number(state?.standing ?? 0),
         unlocked: Boolean(state?.unlocked ?? trader.unlockedByDefault),
@@ -571,11 +640,8 @@ export async function getTraders(profileId: string): Promise<TraderSummary[]> {
       if (typeof trader._id !== "string" || !profileIdPattern.test(trader._id)) continue;
 
       const existing = tradersById.get(trader._id);
-      const nickname = trader.nickname ?? existing?.nickname ?? "";
-      const name =
-        trader.nickname === trader.surname
-          ? nickname
-          : [trader.nickname, trader.surname].filter(Boolean).join(" ") || existing?.name || "";
+      const nickname = getEnglishTraderName(trader._id, trader.nickname, existing?.nickname ?? "");
+      const name = nickname || existing?.name || "";
       if (!name) continue;
 
       tradersById.set(trader._id, {
@@ -592,6 +658,131 @@ export async function getTraders(profileId: string): Promise<TraderSummary[]> {
   }
 
   return [...tradersById.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export async function getLockedTraderOffers(
+  profileId: string,
+  templateId: string,
+): Promise<LockedTraderOffer[]> {
+  if (!profileIdPattern.test(profileId)) {
+    throw new Error("Perfil inválido.");
+  }
+  if (!profileIdPattern.test(templateId)) {
+    throw new Error("O item informado é inválido.");
+  }
+
+  const [profile, templates, locale] = await Promise.all([
+    readProfileFile(profileId),
+    getTemplates(),
+    getLocale(),
+  ]);
+  const template = templates.get(templateId);
+  if (template?._props?.CanSellOnRagfair !== true) return [];
+
+  const pmc = profile.characters?.pmc;
+  const traderState = pmc?.TradersInfo ?? {};
+  const questStatuses = new Map(
+    (pmc?.Quests ?? [])
+      .filter((quest): quest is { qid: string; status: number } =>
+        typeof quest.qid === "string" && typeof quest.status === "number",
+      )
+      .map((quest) => [quest.qid, quest.status]),
+  );
+  const { traders: tradersPath } = getSptPaths();
+  const entries = await readdir(/*turbopackIgnore: true*/ tradersPath, { withFileTypes: true });
+  const traderDirectories = entries.filter((entry) => entry.isDirectory());
+  const offersByTrader = await Promise.all(
+    traderDirectories.map(async (entry) => {
+      const traderId = entry.name;
+      const traderDirectory = path.join(tradersPath, traderId);
+      const [trader, assort, questAssort] = await Promise.all([
+        readJson<RawTrader>(path.join(traderDirectory, "base.json")),
+        readJson<RawTraderAssort>(path.join(traderDirectory, "assort.json")),
+        readOptionalJson<RawTraderQuestAssort>(
+          path.join(traderDirectory, "questassort.json"),
+          {},
+        ),
+      ]);
+      const state = traderState[traderId];
+      const traderName = getEnglishTraderName(traderId, trader.nickname);
+      const currentLevel = Number(state?.loyaltyLevel ?? 0);
+
+      return (assort.items ?? [])
+        .filter(
+          (item): item is RawTraderAssortItem & { _id: string } =>
+            item._tpl === templateId &&
+            typeof item._id === "string" &&
+            (item.parentId === "hideout" || item.slotId === "hideout"),
+        )
+        .flatMap((item) => {
+          const requirements: string[] = [];
+          const requiredLevel = Number(assort.loyal_level_items?.[item._id] ?? 1);
+          const unlocked = state?.unlocked ?? trader.unlockedByDefault ?? false;
+          if (state?.disabled || !unlocked) {
+            requirements.push("Comerciante ainda não desbloqueado");
+          }
+          if (requiredLevel > currentLevel) {
+            requirements.push(`Requer nível de lealdade ${requiredLevel} (atual: ${currentLevel})`);
+          }
+
+          const requiredQuestId =
+            questAssort.success?.[item._id] ?? questAssort.started?.[item._id];
+          if (requiredQuestId) {
+            const questStatus = questStatuses.get(requiredQuestId);
+            const requiresQuestCompletion = questAssort.success?.[item._id] === requiredQuestId;
+            const questIsAvailable =
+              !requiresQuestCompletion &&
+              typeof questStatus === "number" &&
+              questStatus >= 2 &&
+              questStatus <= 4;
+            const questIsCompleted = questStatus === 4;
+            if (
+              (requiresQuestCompletion && !questIsCompleted) ||
+              (questAssort.started?.[item._id] === requiredQuestId && !questIsAvailable)
+            ) {
+              const questName = locale[`${requiredQuestId} name`] ?? "missão requerida";
+              requirements.push(
+                `${requiresQuestCompletion ? "Requer concluir" : "Requer iniciar"} a missão: ${questName}`,
+              );
+            }
+          }
+
+          if (requirements.length === 0) return [];
+
+          const payment = assort.barter_scheme?.[item._id]?.[0] ?? [];
+          const stackCount = item.upd?.BuyRestrictionMax ?? 1;
+          const offer: LockedTraderOffer = {
+            _id: `locked-${traderId}-${item._id}`,
+            root: item._id,
+            items: [
+              {
+                _id: item._id,
+                _tpl: templateId,
+                upd: {
+                  StackObjectsCount: Math.max(1, stackCount),
+                  ...(template?._props?.MaxHpResource
+                    ? { MedKit: { HpResource: template._props.MaxHpResource } }
+                    : {}),
+                },
+              },
+            ],
+            user: { id: traderId, nickname: traderName, memberType: 4 },
+            requirements: payment.flatMap((requirement) =>
+              typeof requirement._tpl === "string" && typeof requirement.count === "number"
+                ? [{ _tpl: requirement._tpl, count: requirement.count }]
+                : [],
+            ),
+            loyaltyLevel: requiredLevel,
+            buyRestrictionMax: item.upd?.BuyRestrictionMax ?? null,
+            locked: true,
+            lockedReason: requirements.join(" · "),
+          };
+          return [offer];
+        });
+    }),
+  );
+
+  return offersByTrader.flat();
 }
 
 export async function getIntegrationStatus() {

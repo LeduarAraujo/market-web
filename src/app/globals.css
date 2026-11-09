@@ -170,8 +170,10 @@ h1 { margin: 5px 0 1px; color: #f0efe7; font: 700 34px var(--display); letter-sp
 .market-filters-row > label:not(.check-row) { display: flex; align-items: center; gap: 7px; color: #79837d; font: 8px var(--mono); }
 .market-filters-row .select-field { height: 29px; min-width: 100px; font-size: 9px; }
 .market-filters-row .check-row { font-size: 9px; }
-.filter-apply { margin-left: auto; padding: 7px 10px; border: 1px solid #514a38; background: #201d16; color: var(--accent-bright); font: 8px var(--mono); cursor: pointer; }
-.filter-apply:disabled { cursor: wait; opacity: .6; }
+.condition-filter { display: flex; align-items: center; gap: 8px; color: #79837d; font: 8px var(--mono); }
+.condition-filter > span { color: #79837d; }
+.condition-filter label { display: flex; align-items: center; gap: 4px; color: #9da69f; }
+.condition-filter input { width: 52px; height: 29px; padding: 0 5px; border: 1px solid #343d3c; background: #0e1314; color: #dce0d7; font: 9px var(--mono); }
 .offers-summary { min-height: 27px; display: flex; align-items: center; padding: 0 15px; border-bottom: 1px solid #252d2d; color: #78827c; font: 8px var(--mono); letter-spacing: .7px; }
 .offers-list { min-height: 430px; max-height: calc(100vh - 365px); overflow: auto; background: #0e1314; }
 .market-offer-row { min-height: 94px; display: grid; grid-template-columns: 48px minmax(150px, 1.8fr) minmax(105px, 1fr) minmax(100px, .9fr) minmax(85px, .65fr) 92px; align-items: center; gap: 10px; padding: 9px 13px; border-bottom: 1px solid #283031; background: linear-gradient(90deg, #171c1d, #111617); }
@@ -317,6 +319,8 @@ h1 { margin: 5px 0 1px; color: #f0efe7; font: 700 34px var(--display); letter-sp
   .market-filters-row { gap: 8px; padding: 9px; }
   .market-filters-row > label:not(.check-row) { gap: 4px; font-size: 7px; }
   .market-filters-row .select-field { min-width: 85px; }
+  .condition-filter { gap: 5px; font-size: 7px; }
+  .condition-filter input { width: 44px; height: 27px; }
   .selected-market-item strong { max-width: 180px; font-size: 12px; }
   .offers-toolbar { padding: 0 9px; }
   .purchase-dialog { padding: 18px; }
