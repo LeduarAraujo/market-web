@@ -1,8 +1,9 @@
 # SPT Market Web
 
 Aplicação web local para consultar perfis, stash, moedas e comerciantes do SPT.
-O painel não altera os arquivos do jogo ou do perfil: as informações de perfil,
-stash e moedas são lidas localmente.
+Perfil, stash e moedas são lidos localmente. Compras são enviadas ao servidor SPT
+somente após confirmação explícita; o painel não escreve diretamente nos arquivos
+do jogo ou do perfil.
 
 ## Tutorial de instalação e execução
 
@@ -60,13 +61,18 @@ npm run build
 npm run start
 ```
 
-### 4. Consulte o personagem e os saldos
+### 4. Selecione um perfil e consulte os dados
 
-Escolha um personagem no seletor do cabeçalho. O painel carrega o stash, os
-comerciantes e os saldos agregados de **rublos, dólares, euros e GP Coins** a
-partir do perfil local. Use o botão de atualizar do inventário para reler os
-dados. Se você acabou de jogar, atualize após encerrar ou salvar a sessão para
-consultar o perfil atualizado.
+Ao abrir o painel, somente a lista de perfis é carregada. Clique em **ABRIR
+PERFIL** para iniciar a sessão; então o painel carrega stash, comerciantes,
+catálogo do flea e saldos agregados de **rublos, dólares, euros e GP Coins**.
+A sessão selecionada é mantida em um cookie local `HttpOnly` por até 30 dias.
+Use **SAIR** para encerrar a sessão neste navegador. O painel lê os dados do
+perfil local; ele não corrige nem grava arquivos do perfil.
+
+Use o botão de atualizar do inventário para reler os dados. Se você acabou de
+jogar, atualize após encerrar ou salvar a sessão para consultar o perfil
+atualizado.
 
 ### 5. Instale o conector do servidor (opcional)
 
@@ -134,22 +140,33 @@ mods usando o mesmo procedimento acima.
 - **Comerciantes:** reputação e nível de lealdade lidos do perfil.
 - **Conector SPT:** fonte disponível em `connector\`; ao carregar corretamente,
   o estado do conector é exposto por `GET /api/health`.
-- **Busca, compras, anúncios e transações com comerciantes:** o conector
-  encaminha operações para callbacks do SPT, mas a interface ainda não monta
-  todos os DTOs nativos necessários para executá-las.
-- **Ofertas próprias e catálogo de comerciantes:** ainda indisponíveis (`501`).
+- **Busca no flea e compra de ofertas em moeda:** enviadas ao servidor pelo
+  conector. Cada compra exige confirmação explícita, usa os stacks da moeda do
+  perfil para compor o pagamento e é validada pelo próprio SPT.
+- **Anúncios, ofertas próprias, trocas por itens e transações com comerciantes:**
+  ainda não estão disponíveis na interface.
 - O painel não exibe ofertas fictícias nem escreve diretamente nos arquivos de
   perfil.
+- As imagens dos itens vêm de `assets.tarkov.dev` e requerem acesso à internet;
+  o restante do catálogo e da integração é lido localmente.
 
 ## API local
 
 - `GET /api/health` — estado e capacidades da integração.
 - `GET /api/profiles` — lista perfis locais sem expor o JSON completo.
+- `GET /api/session` — informa o perfil selecionado no cookie local.
+- `POST /api/session` — seleciona um perfil e grava sua sessão no cookie
+  `HttpOnly`.
+- `DELETE /api/session` — encerra a sessão e remove o cookie.
 - `GET /api/profiles/{profileId}/stash` — itens diretamente no stash e seus
   metadados visuais.
 - `GET /api/profiles/{profileId}/currencies` — saldos agregados de rublos,
   dólares, euros e GP Coins.
 - `GET /api/profiles/{profileId}/traders` — reputação e nível de lealdade.
+- `GET /api/market/catalog` — categorias, subcategorias e itens do handbook SPT.
+- `POST /api/market/search` — busca real de ofertas de um item no servidor SPT.
+- `POST /api/market/buy` — compra confirmada de uma oferta paga em rublos,
+  dólares ou euros.
 - `POST /api/market/{operation}` — proxy local para operações do conector.
 - `POST /api/market/my-offers` e `POST /api/market/trader-catalog` — respondem
   `501 operation_not_available` enquanto essas leituras não forem implementadas.
@@ -157,4 +174,6 @@ mods usando o mesmo procedimento acima.
 O servidor SPT usa HTTPS e seu certificado local; o backend do painel confia
 nesse certificado e usa o protocolo esperado pelo SPT. As respostas vazias do
 servidor são reportadas como erro, não como sucesso. Os servidores web de
-desenvolvimento e produção escutam somente em `127.0.0.1`.
+desenvolvimento e produção escutam somente em `127.0.0.1`. As rotas de dados
+do perfil e do mercado exigem que o perfil esteja selecionado no cookie da
+sessão atual.

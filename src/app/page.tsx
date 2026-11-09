@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CurrencyBalances, PlayerProfile, StashItem, TraderSummary } from "@/lib/spt-data";
+import type {
+  CurrencyBalances,
+  FleaCatalog,
+  FleaCatalogItem,
+  PlayerProfile,
+  StashItem,
+  TraderSummary,
+} from "@/lib/spt-data";
 
 type Screen = "characters" | "stash" | "flea" | "traders";
 type Integration = {
@@ -15,6 +22,32 @@ type Integration = {
   message: string;
 };
 
+type FleaOfferView = {
+  id: string;
+  itemId: string;
+  itemName: string;
+  itemCount: number;
+  seller: string;
+  sellerIsTrader: boolean;
+  rating: number | null;
+  conditionPercent: number | null;
+  foundInRaid: boolean;
+  price: number | null;
+  currencyTemplateId: string | null;
+  currencyLabel: string;
+  barterItems: string[];
+  endTime: number | null;
+  traderLimit: number | null;
+  loyaltyLevel: number | null;
+  locked: boolean;
+};
+
+const currenciesByTemplate: Record<string, { label: string; symbol: string }> = {
+  "5449016a4bdc2d6f028b456f": { label: "RUB", symbol: "₽" },
+  "5696686a4bdc2da3298b456a": { label: "USD", symbol: "$" },
+  "569668774bdc2da2298b4568": { label: "EUR", symbol: "€" },
+};
+
 const screens: Array<{ id: Screen; label: string; short: string }> = [
   { id: "characters", label: "PERSONAGENS", short: "CH" },
   { id: "stash", label: "STASH", short: "ST" },
@@ -26,21 +59,231 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat("pt-BR").format(value);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function firstString(record: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    if (typeof record[key] === "string" && record[key]) return record[key] as string;
+  }
+  return "";
+}
+
+function firstNumber(record: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function getOffersResponse(value: unknown): { offers: Record<string, unknown>[]; count: number | null } {
+  const outer = asRecord(value);
+  const result = asRecord(outer?.data) ?? asRecord(outer?.result) ?? outer;
+  const rawOffers = result?.offers ?? result?.Offers;
+  const offers = Array.isArray(rawOffers)
+    ? rawOffers.map(asRecord).filter((offer): offer is Record<string, unknown> => offer !== null)
+    : [];
+  return {
+    offers,
+    count: result ? firstNumber(result, "offersCount", "OffersCount", "count") : null,
+  };
+}
+
+function getOfferRequirements(offer: Record<string, unknown>) {
+  const requirements = offer.requirements ?? offer.Requirements;
+  return Array.isArray(requirements)
+    ? requirements.map(asRecord).filter((item): item is Record<string, unknown> => item !== null)
+    : [];
+}
+
+function normalizeFleaOffer(
+  offer: Record<string, unknown>,
+  catalogItems: Map<string, FleaCatalogItem>,
+  traders: TraderSummary[],
+): FleaOfferView {
+  const listedItems = offer.items ?? offer.Items;
+  const itemList = Array.isArray(listedItems)
+    ? listedItems.map(asRecord).filter((item): item is Record<string, unknown> => item !== null)
+    : [];
+  const rootId = firstString(offer, "root", "Root", "rootId", "RootId");
+  const rootItem =
+    itemList.find((item) => item._id === rootId || item.Id === rootId) ?? itemList[0];
+  const itemId =
+    (rootItem ? firstString(rootItem, "_tpl", "templateId", "TemplateId") : "") ||
+    firstString(offer, "templateId", "TemplateId");
+  const item = catalogItems.get(itemId);
+  const rootUpd = rootItem ? asRecord(rootItem.upd) ?? asRecord(rootItem.Upd) : null;
+  const repairable = rootUpd ? asRecord(rootUpd.Repairable) ?? asRecord(rootUpd.repairable) : null;
+  const durability = repairable ? firstNumber(repairable, "Durability") : null;
+  const maxDurability = repairable ? firstNumber(repairable, "MaxDurability") : null;
+  const user = asRecord(offer.user) ?? asRecord(offer.User) ?? {};
+  const traderIds = [
+    firstString(offer, "traderId", "TraderId", "ownerId", "OwnerId", "userId", "UserId"),
+    firstString(user, "traderId", "TraderId", "ownerId", "OwnerId", "id", "_id", "Id"),
+  ].filter(Boolean);
+  const avatar = firstString(user, "avatar", "Avatar", "avatarUrl", "AvatarUrl");
+  const avatarTraderId = avatar.match(/[a-f\d]{24}/i)?.[0];
+  if (avatarTraderId) traderIds.push(avatarTraderId);
+  const trader = traders.find((entry) => traderIds.includes(entry.id));
+  const memberType = firstNumber(user, "memberType", "MemberType");
+  const sellerType = firstString(offer, "ownerType", "OwnerType").toLocaleLowerCase("en");
+  const sellerIsTrader = Boolean(
+    trader ||
+      memberType === 4 ||
+      sellerType === "trader" ||
+      sellerType === "traderownertype",
+  );
+  const requirements = getOfferRequirements(offer);
+  const monetaryRequirement = requirements.find((requirement) => {
+    const templateId = firstString(requirement, "_tpl", "templateId");
+    return Object.hasOwn(currenciesByTemplate, templateId);
+  });
+  const currencyTemplateId = monetaryRequirement
+    ? firstString(monetaryRequirement, "_tpl", "templateId")
+    : "";
+  const currency = currenciesByTemplate[currencyTemplateId];
+  const requirementPrice = monetaryRequirement
+    ? firstNumber(monetaryRequirement, "count", "Count")
+    : null;
+  const price = requirementPrice ?? firstNumber(offer, "requirementsCost", "summaryCost", "price");
+  const endTime = firstNumber(offer, "endTime", "EndTime");
+  const loyaltyLevel = firstNumber(offer, "loyaltyLevel", "LoyaltyLevel");
+  const traderLimit = firstNumber(offer, "buyRestrictionMax", "BuyRestrictionMax");
+  const sellerNames = [
+    firstString(user, "nickname", "Nickname", "name", "Name"),
+    firstString(offer, "seller", "sellerName", "ownerName"),
+  ].filter((name) => !["trader", "merchant", "comerciante", "vendedor"].includes(name.toLocaleLowerCase("en")));
+  const sellerName = trader?.nickname || trader?.name || sellerNames[0] || (sellerIsTrader ? "Comerciante" : "Vendedor");
+
+  return {
+    id: firstString(offer, "_id", "id", "offerId", "Id"),
+    itemId,
+    itemName: item?.name || firstString(rootItem ?? {}, "name", "Name") || "Item",
+    itemCount: Math.max(
+      1,
+      firstNumber(rootUpd ?? {}, "StackObjectsCount") ??
+        firstNumber(rootItem ?? {}, "count", "Count") ??
+        firstNumber(offer, "quantity", "count") ??
+        1,
+    ),
+    seller: sellerName,
+    sellerIsTrader,
+    rating: firstNumber(user, "rating", "Rating"),
+    conditionPercent:
+      durability !== null && maxDurability !== null && maxDurability > 0
+        ? Math.min(100, Math.max(0, Math.round((durability / maxDurability) * 100)))
+        : null,
+    foundInRaid: Boolean(rootUpd?.SpawnedInSession ?? rootUpd?.spawnedInSession ?? false),
+    price,
+    currencyTemplateId: currency ? currencyTemplateId : null,
+    currencyLabel: currency?.label ?? "TROCA",
+    barterItems: requirements
+      .filter((requirement) => !Object.hasOwn(currenciesByTemplate, firstString(requirement, "_tpl", "templateId")))
+      .map((requirement) => {
+        const templateId = firstString(requirement, "_tpl", "templateId");
+        const barterItem = catalogItems.get(templateId);
+        const count = firstNumber(requirement, "count", "Count") ?? 1;
+        return `${barterItem?.shortName ?? templateId} ×${formatNumber(count)}`;
+      }),
+    endTime: endTime === null ? null : endTime < 1_000_000_000_000 ? endTime * 1000 : endTime,
+    traderLimit,
+    loyaltyLevel,
+    locked: Boolean(offer.locked ?? offer.isLocked ?? false),
+  };
+}
+
+function formatRemainingTime(endTime: number | null, now: number) {
+  if (endTime === null) return "—";
+  const remaining = Math.max(0, Math.floor((endTime - now) / 1000));
+  if (remaining <= 0) return "EXPIRADO";
+  const hours = Math.floor(remaining / 3600);
+  const minutes = Math.floor((remaining % 3600) / 60);
+  const seconds = remaining % 60;
+  return hours > 0
+    ? `${hours}h ${String(minutes).padStart(2, "0")}m`
+    : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 export default function Home() {
   const [profiles, setProfiles] = useState<PlayerProfile[]>([]);
   const [profileId, setProfileId] = useState("");
   const [items, setItems] = useState<StashItem[]>([]);
   const [traders, setTraders] = useState<TraderSummary[]>([]);
   const [currencies, setCurrencies] = useState<CurrencyBalances | null>(null);
+  const [fleaCatalog, setFleaCatalog] = useState<FleaCatalog>({ categories: [], items: [] });
+  const [fleaCatalogLoading, setFleaCatalogLoading] = useState(false);
+  const [fleaCategoryId, setFleaCategoryId] = useState<string | null>(null);
+  const [fleaQuery, setFleaQuery] = useState("");
+  const [selectedFleaItem, setSelectedFleaItem] = useState<FleaCatalogItem | null>(null);
+  const [fleaOffers, setFleaOffers] = useState<FleaOfferView[]>([]);
+  const [fleaClock, setFleaClock] = useState(Date.now());
+  const [fleaOffersLoading, setFleaOffersLoading] = useState(false);
+  const [fleaOfferCount, setFleaOfferCount] = useState<number | null>(null);
+  const [fleaPage, setFleaPage] = useState(0);
+  const [fleaHasMore, setFleaHasMore] = useState(false);
+  const [fleaOwnerType, setFleaOwnerType] = useState(0);
+  const [excludeBartering, setExcludeBartering] = useState(true);
+  const [fleaSort, setFleaSort] = useState("price-asc");
+  const [purchaseOffer, setPurchaseOffer] = useState<FleaOfferView | null>(null);
+  const [purchasingOffer, setPurchasingOffer] = useState(false);
   const [screen, setScreen] = useState<Screen>("characters");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<Integration | null>(null);
   const [loadingProfiles, setLoadingProfiles] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
+  const [openingProfile, setOpeningProfile] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
   const selectedProfile = profiles.find((profile) => profile.id === profileId);
+  const fleaItemsById = useMemo(
+    () => new Map(fleaCatalog.items.map((item) => [item.id, item])),
+    [fleaCatalog.items],
+  );
+  const fleaCategoriesById = useMemo(
+    () => new Map(fleaCatalog.categories.map((category) => [category.id, category])),
+    [fleaCatalog.categories],
+  );
+  const fleaCategoryPath = useMemo(() => {
+    const path = [];
+    let category = fleaCategoryId ? fleaCategoriesById.get(fleaCategoryId) : undefined;
+    while (category) {
+      path.unshift(category);
+      category = category.parentId ? fleaCategoriesById.get(category.parentId) : undefined;
+    }
+    return path;
+  }, [fleaCategoriesById, fleaCategoryId]);
+  const visibleFleaCategories = useMemo(
+    () =>
+      fleaCatalog.categories.filter(
+        (category) => category.parentId === fleaCategoryId && category.itemCount > 0,
+      ),
+    [fleaCatalog.categories, fleaCategoryId],
+  );
+  const visibleFleaItems = useMemo(() => {
+    const query = fleaQuery.trim().toLocaleLowerCase("pt-BR");
+    const results = fleaCatalog.items.filter((item) =>
+      query
+        ? `${item.name} ${item.shortName}`.toLocaleLowerCase("pt-BR").includes(query)
+        : item.categoryId === fleaCategoryId,
+    );
+    return query ? results.slice(0, 100) : results;
+  }, [fleaCatalog.items, fleaCategoryId, fleaQuery]);
+  const displayedFleaOffers = useMemo(() => {
+    const sorted = [...fleaOffers];
+    if (fleaSort === "price-asc") {
+      sorted.sort((left, right) => (left.price ?? Number.MAX_SAFE_INTEGER) - (right.price ?? Number.MAX_SAFE_INTEGER));
+    } else if (fleaSort === "price-desc") {
+      sorted.sort((left, right) => (right.price ?? -1) - (left.price ?? -1));
+    } else if (fleaSort === "expiry") {
+      sorted.sort((left, right) => (left.endTime ?? Number.MAX_SAFE_INTEGER) - (right.endTime ?? Number.MAX_SAFE_INTEGER));
+    }
+    return sorted;
+  }, [fleaOffers, fleaSort]);
 
   useEffect(() => {
     let active = true;
@@ -50,13 +293,20 @@ export default function Home() {
         if (!response.ok) throw new Error(result.error ?? "Falha ao carregar perfis.");
         return result.profiles as PlayerProfile[];
       }),
-      fetch("/api/health", { cache: "no-store" }).then((response) => response.json()),
     ])
-      .then(([profilesResult, health]) => {
+      .then(async ([profilesResult]) => {
+        const sessionResponse = await fetch("/api/session", { cache: "no-store" });
+        const sessionResult = await sessionResponse.json();
+        if (!sessionResponse.ok) throw new Error(sessionResult.error ?? "Falha ao restaurar a sessão.");
         if (!active) return;
         setProfiles(profilesResult);
-        setProfileId(profilesResult[0]?.id ?? "");
-        setStatus(health.integration as Integration);
+        const savedProfileId =
+          typeof sessionResult.profileId === "string" &&
+          profilesResult.some((profile) => profile.id === sessionResult.profileId)
+            ? sessionResult.profileId
+            : "";
+        setProfileId(savedProfileId);
+        setScreen(savedProfileId ? "stash" : "characters");
       })
       .catch((cause: unknown) => {
         if (active) setError(cause instanceof Error ? cause.message : "Falha de comunicação local.");
@@ -69,6 +319,43 @@ export default function Home() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!profileId) {
+      setFleaCatalog({ categories: [], items: [] });
+      return;
+    }
+
+    let active = true;
+    setFleaCatalogLoading(true);
+    Promise.all([
+      fetch("/api/market/catalog", { cache: "no-store" }).then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error ?? "Falha ao carregar categorias do flea.");
+        return result as FleaCatalog;
+      }),
+      fetch("/api/health", { cache: "no-store" }).then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error ?? "Falha ao verificar a integração.");
+        return result.integration as Integration;
+      }),
+    ])
+      .then(([catalog, integration]) => {
+        if (!active) return;
+        setFleaCatalog(catalog);
+        setStatus(integration);
+      })
+      .catch((cause: unknown) => {
+        if (active) setError(cause instanceof Error ? cause.message : "Falha ao carregar dados locais.");
+      })
+      .finally(() => {
+        if (active) setFleaCatalogLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [profileId]);
 
   const loadProfileData = useCallback(async () => {
     if (!profileId) return;
@@ -106,6 +393,139 @@ export default function Home() {
     void loadProfileData();
   }, [loadProfileData]);
 
+  useEffect(() => {
+    if (fleaOffers.length === 0) return;
+    const timer = setInterval(() => setFleaClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [fleaOffers.length]);
+
+  async function searchFleaOffers(item: FleaCatalogItem, page = 0, append = false) {
+    if (!profileId) {
+      setError("Selecione um personagem antes de pesquisar no flea.");
+      return;
+    }
+
+    setSelectedFleaItem(item);
+    setFleaCategoryId(item.categoryId);
+    setFleaOffersLoading(true);
+    setError("");
+    setNotice("");
+    if (!append) {
+      setFleaOffers([]);
+      setFleaOfferCount(null);
+    }
+
+    try {
+      const response = await fetch("/api/market/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          payload: {
+            page,
+            pageId: page,
+            limit: 100,
+            sortType: fleaSort === "expiry" ? 5 : 4,
+            sortDirection: fleaSort === "price-desc" ? 1 : 0,
+            currency: 0,
+            priceFrom: 0,
+            priceTo: 999999999,
+            quantityFrom: 1,
+            quantityTo: 999999,
+            conditionFrom: 0,
+            conditionTo: 100,
+            oneHourExpiration: false,
+            oneHourExpire: false,
+            removeBartering: excludeBartering,
+            offerOwnerType: fleaOwnerType,
+            onlyFunctional: false,
+            updateOfferCount: true,
+            handbookId: item.id,
+            linkedSearchId: "",
+            neededSearchId: "",
+            buildItems: {},
+            buildCount: 0,
+            tm: 1,
+          },
+        }),
+      });
+      const result: unknown = await response.json();
+      if (!response.ok) {
+        const details = asRecord(result);
+        throw new Error(
+          firstString(details ?? {}, "message", "error") || "O servidor SPT não conseguiu pesquisar as ofertas.",
+        );
+      }
+
+      const searchResult = getOffersResponse(result);
+      const offers = searchResult.offers.map((offer) =>
+        normalizeFleaOffer(offer, fleaItemsById, traders),
+      );
+      setFleaOffers((current) => (append ? [...current, ...offers] : offers));
+      setFleaPage(page);
+      setFleaOfferCount(searchResult.count);
+      setFleaHasMore(
+        searchResult.count !== null
+          ? (page + 1) * 100 < searchResult.count
+          : offers.length === 100,
+      );
+      if (offers.length === 0 && !append) {
+        setNotice("Nenhuma oferta encontrada para este item com os filtros atuais.");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Falha de comunicação com o servidor SPT.");
+      if (!append) setFleaOffers([]);
+      setFleaHasMore(false);
+    } finally {
+      setFleaOffersLoading(false);
+    }
+  }
+
+  async function confirmFleaPurchase() {
+    if (!purchaseOffer || !profileId || !purchaseOffer.currencyTemplateId || !purchaseOffer.price) {
+      setError("Esta oferta não possui pagamento em moeda suportada pelo sistema de compra.");
+      return;
+    }
+
+    setPurchasingOffer(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/market/buy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          payload: {
+            offerId: purchaseOffer.id,
+            currencyTemplateId: purchaseOffer.currencyTemplateId,
+            price: purchaseOffer.price,
+          },
+        }),
+      });
+      const result: unknown = await response.json();
+      const details = asRecord(result);
+      if (!response.ok) {
+        throw new Error(firstString(details ?? {}, "message", "error") || "O servidor SPT recusou a compra.");
+      }
+
+      const transactionData = asRecord(details?.data) ?? details;
+      const badRequests = transactionData?.badRequest ?? transactionData?.BadRequest;
+      if (Array.isArray(badRequests) && badRequests.length > 0) {
+        const firstFailure = asRecord(badRequests[0]);
+        throw new Error(
+          firstString(firstFailure ?? {}, "errmsg", "message") || "O servidor SPT recusou a compra.",
+        );
+      }
+
+      setNotice("O servidor SPT processou a compra. Atualize o stash para conferir o item.");
+      setPurchaseOffer(null);
+      await loadProfileData();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Falha ao concluir a compra no servidor SPT.");
+    } finally {
+      setPurchasingOffer(false);
+    }
+  }
+
   const filteredItems = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("pt-BR");
     if (!query) return items;
@@ -125,6 +545,60 @@ export default function Home() {
       setNotice(result.message ?? result.error ?? "Operação indisponível.");
     } catch {
       setNotice("Não foi possível alcançar a API local.");
+    }
+  }
+
+  async function enterProfile(nextProfileId: string) {
+    setOpeningProfile(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profileId: nextProfileId }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error ?? "Não foi possível abrir o perfil.");
+      }
+
+      setProfileId(result.profileId as string);
+      setScreen("stash");
+      setItems([]);
+      setTraders([]);
+      setCurrencies(null);
+      setStatus(null);
+      setFleaCatalog({ categories: [], items: [] });
+      setFleaCategoryId(null);
+      setFleaOffers([]);
+      setSelectedFleaItem(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não foi possível abrir o perfil.");
+    } finally {
+      setOpeningProfile(false);
+    }
+  }
+
+  async function exitProfile() {
+    try {
+      const response = await fetch("/api/session", { method: "DELETE" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Não foi possível encerrar a sessão.");
+
+      setProfileId("");
+      setScreen("characters");
+      setItems([]);
+      setTraders([]);
+      setCurrencies(null);
+      setFleaCatalog({ categories: [], items: [] });
+      setFleaOffers([]);
+      setSelectedFleaItem(null);
+      setStatus(null);
+      setError("");
+      setNotice("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não foi possível encerrar a sessão.");
     }
   }
 
@@ -152,74 +626,76 @@ export default function Home() {
             <span className="topbar-separator">/</span>
             <span>SPT 4.1.6</span>
           </div>
-          <div className="profile-picker">
-            <div className="profile-emblem">{selectedProfile?.name.slice(0, 1).toUpperCase() ?? "?"}</div>
-            <label htmlFor="profile-select">
-              <small>PERSONAGEM ATIVO</small>
-              <select
-                id="profile-select"
-                value={profileId}
-                onChange={(event) => {
-                  setProfileId(event.target.value);
-                  setCurrencies(null);
+          {profileId && (
+            <div className="profile-picker">
+              <div className="profile-emblem">{selectedProfile?.name.slice(0, 1).toUpperCase() ?? "?"}</div>
+              <label htmlFor="profile-select">
+                <small>PERSONAGEM ATIVO</small>
+                <select
+                  id="profile-select"
+                  value={profileId}
+                  onChange={(event) => void enterProfile(event.target.value)}
+                  disabled={loadingProfiles || openingProfile || profiles.length === 0}
+                >
+                  {profiles.map((profile) => (
+                    <option value={profile.id} key={profile.id}>
+                      {profile.name} — Nv. {profile.level}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <span className="chevron">⌄</span>
+              <button className="text-button" onClick={() => void exitProfile()} disabled={openingProfile}>
+                SAIR
+              </button>
+            </div>
+          )}
+        </header>
+
+        {profileId && (
+          <nav className="main-nav" aria-label="Seções">
+            {screens.map((entry, index) => (
+              <button
+                className={`nav-tab ${screen === entry.id ? "active" : ""}`}
+                key={entry.id}
+                onClick={() => {
+                  setScreen(entry.id);
+                  setSearch("");
                   setNotice("");
                   setError("");
                 }}
-                disabled={loadingProfiles || profiles.length === 0}
               >
-                {loadingProfiles && <option value="">Carregando perfis…</option>}
-                {!loadingProfiles && profiles.length === 0 && <option value="">Nenhum perfil</option>}
-                {profiles.map((profile) => (
-                  <option value={profile.id} key={profile.id}>
-                    {profile.name} — Nv. {profile.level}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span className="chevron">⌄</span>
+                <span className="nav-index">0{index + 1}</span>
+                <span className="nav-short">{entry.short}</span>
+                {entry.label}
+                {screen === entry.id && <i />}
+              </button>
+            ))}
+            <div className="nav-right">
+              <span className="profile-identity">{selectedProfile?.faction ?? "—"}</span>
+              <span className="profile-level">LVL {selectedProfile?.level ?? "—"}</span>
+            </div>
+          </nav>
+        )}
+        {profileId && (
+          <div className="currency-bar" aria-label="Saldo de moedas do personagem">
+            <span className="currency-heading">SALDO DO PERSONAGEM</span>
+            <div className="currency-list">
+              <span className="currency-pill" aria-label={`Rublos: ${currencies?.rubles ?? "carregando"}`}>
+                <b>₽</b> Rublos <strong>{currencies ? formatNumber(currencies.rubles) : "—"}</strong>
+              </span>
+              <span className="currency-pill" aria-label={`Dólares: ${currencies?.dollars ?? "carregando"}`}>
+                <b>$</b> Dólares <strong>{currencies ? formatNumber(currencies.dollars) : "—"}</strong>
+              </span>
+              <span className="currency-pill" aria-label={`Euros: ${currencies?.euros ?? "carregando"}`}>
+                <b>€</b> Euros <strong>{currencies ? formatNumber(currencies.euros) : "—"}</strong>
+              </span>
+              <span className="currency-pill" aria-label={`GP Coins: ${currencies?.gpCoins ?? "carregando"}`}>
+                <b>GP</b> GP Coins <strong>{currencies ? formatNumber(currencies.gpCoins) : "—"}</strong>
+              </span>
+            </div>
           </div>
-        </header>
-
-        <nav className="main-nav" aria-label="Seções">
-          {screens.map((entry, index) => (
-            <button
-              className={`nav-tab ${screen === entry.id ? "active" : ""}`}
-              key={entry.id}
-              onClick={() => {
-                setScreen(entry.id);
-                setSearch("");
-                setNotice("");
-                setError("");
-              }}
-            >
-              <span className="nav-index">0{index + 1}</span>
-              <span className="nav-short">{entry.short}</span>
-              {entry.label}
-              {screen === entry.id && <i />}
-            </button>
-          ))}
-          <div className="nav-right">
-            <span className="profile-identity">{selectedProfile?.faction ?? "—"}</span>
-            <span className="profile-level">LVL {selectedProfile?.level ?? "—"}</span>
-          </div>
-        </nav>
-        <div className="currency-bar" aria-label="Saldo de moedas do personagem">
-          <span className="currency-heading">SALDO DO PERSONAGEM</span>
-          <div className="currency-list">
-            <span className="currency-pill" aria-label={`Rublos: ${currencies?.rubles ?? "carregando"}`}>
-              <b>₽</b> Rublos <strong>{currencies ? formatNumber(currencies.rubles) : "—"}</strong>
-            </span>
-            <span className="currency-pill" aria-label={`Dólares: ${currencies?.dollars ?? "carregando"}`}>
-              <b>$</b> Dólares <strong>{currencies ? formatNumber(currencies.dollars) : "—"}</strong>
-            </span>
-            <span className="currency-pill" aria-label={`Euros: ${currencies?.euros ?? "carregando"}`}>
-              <b>€</b> Euros <strong>{currencies ? formatNumber(currencies.euros) : "—"}</strong>
-            </span>
-            <span className="currency-pill" aria-label={`GP Coins: ${currencies?.gpCoins ?? "carregando"}`}>
-              <b>GP</b> GP Coins <strong>{currencies ? formatNumber(currencies.gpCoins) : "—"}</strong>
-            </span>
-          </div>
-        </div>
+        )}
 
         <section className="content">
           <div className="page-heading">
@@ -232,14 +708,16 @@ export default function Home() {
                   : screen === "stash"
                   ? "Seu estoque pessoal, sincronizado em modo somente leitura."
                   : screen === "flea"
-                    ? "Pesquise ofertas e gerencie suas vendas."
+                    ? "Navegue pelas categorias, consulte ofertas reais e compre com confirmação."
                     : "Reputação e acesso aos comerciantes do seu perfil."}
               </p>
             </div>
-            <div className={`connection-badge ${status?.connectorInstalled ? "connected" : "readonly"}`}>
-              <span className="status-dot" />
-              {status?.connectorInstalled ? "CONECTOR ONLINE" : "LEITURA LOCAL"}
-            </div>
+            {profileId && (
+              <div className={`connection-badge ${status?.connectorInstalled ? "connected" : "readonly"}`}>
+                <span className="status-dot" />
+                {status?.connectorInstalled ? "CONECTOR ONLINE" : "LEITURA LOCAL"}
+              </div>
+            )}
           </div>
 
           {(error || notice) && (
@@ -278,12 +756,10 @@ export default function Home() {
                       </div>
                       <button
                         className="character-enter"
-                        onClick={() => {
-                          setProfileId(profile.id);
-                          setScreen("stash");
-                        }}
+                        onClick={() => void enterProfile(profile.id)}
+                        disabled={openingProfile}
                       >
-                        {profile.id === profileId ? "CONTINUAR COM ESTE PERFIL" : "ABRIR PERFIL"}
+                        {openingProfile ? "ABRINDO PERFIL…" : profile.id === profileId ? "CONTINUAR COM ESTE PERFIL" : "ABRIR PERFIL"}
                         <span>↗</span>
                       </button>
                     </article>
@@ -291,7 +767,7 @@ export default function Home() {
                 </div>
               )}
               <div className="character-disclaimer">
-                <span className="status-dot" /> PERFIS E DADOS DE JOGO SÃO LIDOS LOCALMENTE · NENHUM ARQUIVO É ALTERADO
+                <span className="status-dot" /> PERFIS SÃO LIDOS LOCALMENTE · COMPRAS CONFIRMADAS SÃO EXECUTADAS PELO SPT
               </div>
             </section>
           )}
@@ -351,50 +827,278 @@ export default function Home() {
               </div>
               <div className="panel-footer">
                 <span><i className="status-dot" /> DADOS LOCAIS DO PERFIL</span>
-                <span>ALTERAÇÕES NO JOGO NÃO SÃO ESCRITAS PELA WEB</span>
+                <span>COMPRAS DO FLEA SÃO PROCESSADAS PELO SERVIDOR SPT</span>
               </div>
             </section>
           )}
 
           {screen === "flea" && (
             <section className="market-layout">
-              <aside className="panel market-filters">
+              <aside className="panel flea-browser">
                 <div className="panel-title">
                   <span className="panel-mark">02</span>
-                  <div><strong>BUSCAR OFERTAS</strong><small>FILTROS DO MERCADO</small></div>
+                  <div><strong>CATÁLOGO DE ITENS</strong><small>CATEGORIAS DO SPT</small></div>
                 </div>
-                <label className="field-label" htmlFor="flea-query">NOME DO ITEM</label>
                 <div className="search-box full">
-                  <span>⌕</span><input id="flea-query" placeholder="Ex.: Salewa, AK-74..." value={search} onChange={(event) => setSearch(event.target.value)} />
+                  <span>⌕</span>
+                  <input
+                    id="flea-query"
+                    aria-label="Buscar item no catálogo do flea"
+                    placeholder="Digite o nome do item..."
+                    value={fleaQuery}
+                    onChange={(event) => setFleaQuery(event.target.value)}
+                  />
+                  {fleaQuery && <button aria-label="Limpar busca de itens" onClick={() => setFleaQuery("")}>×</button>}
                 </div>
-                <label className="field-label" htmlFor="sort-price">ORDENAR POR</label>
-                <select id="sort-price" className="select-field" defaultValue="lowest">
-                  <option value="lowest">Menor preço</option><option value="highest">Maior preço</option><option value="expiry">Expiração</option>
-                </select>
-                <label className="check-row"><input type="checkbox" defaultChecked /> Excluir trocas</label>
-                <label className="check-row"><input type="checkbox" /> Apenas itens encontrados em raid</label>
-                <button className="primary-button" onClick={() => void requestMarketAction("search")}>BUSCAR NO FLEA <span>↗</span></button>
-                <div className="connector-note">
-                  <span className="note-icon">!</span>
-                  <p>A busca de ofertas requer o conector do servidor SPT. Nenhuma oferta fictícia é exibida.</p>
+                {!fleaQuery && (
+                  <div className="flea-breadcrumbs" aria-label="Caminho das categorias">
+                    <button className={!fleaCategoryId ? "active" : ""} onClick={() => setFleaCategoryId(null)}>
+                      TODAS
+                    </button>
+                    {fleaCategoryPath.map((category) => (
+                      <button
+                        key={category.id}
+                        className={category.id === fleaCategoryId ? "active" : ""}
+                        onClick={() => setFleaCategoryId(category.id)}
+                      >
+                        / {category.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flea-catalog-list">
+                  {fleaCatalogLoading ? (
+                    <div className="empty-state"><span className="loader" />CARREGANDO CATEGORIAS…</div>
+                  ) : fleaQuery && visibleFleaItems.length === 0 ? (
+                    <div className="empty-state">NENHUM ITEM ENCONTRADO</div>
+                  ) : !fleaQuery && visibleFleaCategories.length === 0 && visibleFleaItems.length === 0 ? (
+                    <div className="empty-state">ESTA CATEGORIA NÃO CONTÉM ITENS</div>
+                  ) : (
+                    <>
+                      {!fleaQuery && visibleFleaCategories.map((category) => (
+                        <button
+                          className="flea-category-row"
+                          key={category.id}
+                          onClick={() => setFleaCategoryId(category.id)}
+                        >
+                          <span className="category-chevron">›</span>
+                          <span>{category.name}</span>
+                          <small>{formatNumber(category.itemCount)}</small>
+                        </button>
+                      ))}
+                      {visibleFleaItems.map((item) => (
+                        <button
+                          className={`flea-item-row ${selectedFleaItem?.id === item.id ? "selected" : ""}`}
+                          key={item.id}
+                          onClick={() => void searchFleaOffers(item)}
+                          disabled={fleaOffersLoading}
+                        >
+                          <span className="market-item-icon">
+                            <span>{item.shortName.slice(0, 2).toUpperCase()}</span>
+                            <img
+                              src={`https://assets.tarkov.dev/${item.id}-icon.webp`}
+                              alt=""
+                              loading="lazy"
+                              onError={(event) => {
+                                event.currentTarget.style.display = "none";
+                              }}
+                            />
+                          </span>
+                          <span className="flea-item-name">{item.name}</span>
+                          <span className="flea-item-arrow">⌕</span>
+                        </button>
+                      ))}
+                      {fleaQuery && visibleFleaItems.length === 100 && (
+                        <div className="catalog-limit">Exibindo os primeiros 100 resultados.</div>
+                      )}
+                    </>
+                  )}
+                </div>
+                <div className="catalog-footer">
+                  {fleaQuery
+                    ? `${formatNumber(visibleFleaItems.length)} RESULTADOS`
+                    : `${formatNumber(fleaCatalog.items.length)} ITENS NO CATÁLOGO`}
                 </div>
               </aside>
               <div className="panel offers-panel">
                 <div className="offers-toolbar">
-                  <div className="segmented">
-                    <button className="selected">BUSCAR</button>
-                    <button onClick={() => void requestMarketAction("my-offers")}>MINHAS OFERTAS</button>
+                  <div className="selected-market-item">
+                    {selectedFleaItem ? (
+                      <>
+                        <span className="market-item-icon large">
+                          <span>{selectedFleaItem.shortName.slice(0, 2).toUpperCase()}</span>
+                          <img
+                            src={`https://assets.tarkov.dev/${selectedFleaItem.id}-icon.webp`}
+                            alt=""
+                            onError={(event) => {
+                              event.currentTarget.style.display = "none";
+                            }}
+                          />
+                        </span>
+                        <span><strong>{selectedFleaItem.name}</strong><small>OFERTAS DO SERVIDOR SPT</small></span>
+                      </>
+                    ) : (
+                      <span className="offers-prompt">Selecione um item para consultar as ofertas</span>
+                    )}
                   </div>
-                  <button className="text-button" onClick={() => void requestMarketAction("list")}>＋ ANUNCIAR ITEM</button>
+                  <button
+                    className="text-button"
+                    onClick={() => selectedFleaItem && void searchFleaOffers(selectedFleaItem)}
+                    disabled={!selectedFleaItem || fleaOffersLoading}
+                  >
+                    {fleaOffersLoading ? "BUSCANDO…" : "↻ ATUALIZAR"}
+                  </button>
                 </div>
-                <div className="offers-table-head"><span>OFERTA</span><span>VENDEDOR</span><span>PREÇO</span><span>STATUS</span><span /></div>
-                <div className="market-empty">
-                  <div className="empty-orbit">⌕</div>
-                  <strong>MERCADO AGUARDANDO CONECTOR</strong>
-                  <p>As ofertas reais são fornecidas pelo servidor SPT. Instale o conector local para habilitar busca, compra e anúncios.</p>
-                  <span className="protocol-tag">SPT 4.1.6 · API LOCAL</span>
+                <div className="market-filters-row">
+                  <label>
+                    VENDEDOR
+                    <select
+                      className="select-field"
+                      value={fleaOwnerType}
+                      onChange={(event) => setFleaOwnerType(Number(event.target.value))}
+                    >
+                      <option value={0}>Todos</option>
+                      <option value={2}>Jogadores</option>
+                      <option value={1}>Comerciantes</option>
+                    </select>
+                  </label>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={excludeBartering}
+                      onChange={(event) => setExcludeBartering(event.target.checked)}
+                    />
+                    Excluir trocas
+                  </label>
+                  <label>
+                    ORDENAR
+                    <select className="select-field" value={fleaSort} onChange={(event) => setFleaSort(event.target.value)}>
+                      <option value="price-asc">Menor preço</option>
+                      <option value="price-desc">Maior preço</option>
+                      <option value="expiry">Expiração</option>
+                    </select>
+                  </label>
+                  {selectedFleaItem && (
+                    <button
+                      className="filter-apply"
+                      onClick={() => void searchFleaOffers(selectedFleaItem)}
+                      disabled={fleaOffersLoading}
+                    >
+                      APLICAR
+                    </button>
+                  )}
                 </div>
-                <div className="panel-footer"><span>BUSCA E TRANSAÇÕES DESABILITADAS</span><span>SEM CONECTOR INSTALADO</span></div>
+                <div className="offers-summary">
+                  {selectedFleaItem
+                    ? error
+                      ? "BUSCA NÃO CONCLUÍDA"
+                      : `${fleaOfferCount === null ? fleaOffers.length : formatNumber(fleaOfferCount)} OFERTAS`
+                    : "AGUARDANDO ITEM"}
+                </div>
+                <div className="offers-list">
+                  {fleaOffersLoading ? (
+                    <div className="empty-state"><span className="loader" />CONSULTANDO O SERVIDOR SPT…</div>
+                  ) : !selectedFleaItem ? (
+                    <div className="market-empty">
+                      <div className="empty-orbit">⌕</div>
+                      <strong>ESCOLHA UM ITEM</strong>
+                      <p>Use a busca ou navegue pelas categorias para carregar ofertas reais do servidor SPT.</p>
+                    </div>
+                  ) : error ? (
+                    <div className="empty-state">CONSULTA INTERROMPIDA — VERIFIQUE O AVISO ACIMA</div>
+                  ) : displayedFleaOffers.length === 0 ? (
+                    <div className="empty-state">NENHUMA OFERTA DISPONÍVEL</div>
+                  ) : (
+                    displayedFleaOffers.map((offer) => {
+                      const expired = offer.endTime !== null && offer.endTime <= fleaClock;
+                      const canBuy =
+                        Boolean(offer.id) &&
+                        Boolean(offer.currencyTemplateId) &&
+                        offer.barterItems.length === 0 &&
+                        offer.price !== null &&
+                        offer.price > 0 &&
+                        !offer.locked &&
+                        !expired;
+                      return (
+                        <article className={`market-offer-row ${offer.locked || expired ? "unavailable" : ""}`} key={offer.id || `${offer.itemId}-${offer.seller}`}>
+                          <span className="market-item-icon offer">
+                            <span>{offer.itemName.slice(0, 2).toUpperCase()}</span>
+                            {offer.itemId && (
+                              <img
+                                src={`https://assets.tarkov.dev/${offer.itemId}-icon.webp`}
+                                alt=""
+                                loading="lazy"
+                                onError={(event) => {
+                                  event.currentTarget.style.display = "none";
+                                }}
+                              />
+                            )}
+                          </span>
+                          <div className="offer-item-details">
+                            <strong>{offer.itemName}</strong>
+                            <span>Quantidade: {formatNumber(offer.itemCount)}</span>
+                            {offer.conditionPercent !== null ? (
+                              <span>Condição: {offer.conditionPercent}%</span>
+                            ) : offer.foundInRaid ? (
+                              <span className="found-in-raid">ENCONTRADO EM RAID</span>
+                            ) : (
+                              <span>Estado padrão</span>
+                            )}
+                            {offer.barterItems.length > 0 && (
+                              <span className="barter-details">Troca: {offer.barterItems.join(" + ")}</span>
+                            )}
+                          </div>
+                          <div className="offer-seller">
+                            <strong>{offer.seller}</strong>
+                            <span className={offer.sellerIsTrader ? "seller-trader" : "seller-player"}>
+                              {offer.sellerIsTrader ? "COMERCIANTE" : "JOGADOR"}
+                            </span>
+                            {offer.rating !== null && <span>Reputação {offer.rating.toFixed(2)}</span>}
+                            {offer.sellerIsTrader && offer.traderLimit !== null && (
+                              <span>Limite: {formatNumber(offer.traderLimit)} · Nv. {offer.loyaltyLevel ?? "—"}</span>
+                            )}
+                          </div>
+                          <div className="offer-price">
+                            <strong>
+                              {offer.price === null
+                                ? "—"
+                                : `${currenciesByTemplate[offer.currencyTemplateId ?? ""]?.symbol ?? ""}${formatNumber(offer.price)}`}
+                            </strong>
+                            <span>{offer.currencyLabel}{offer.itemCount > 1 && offer.price !== null ? ` · ${formatNumber(Math.ceil(offer.price / offer.itemCount))}/un.` : ""}</span>
+                          </div>
+                          <div className="offer-expiry">
+                            <span>EXPIRA EM</span>
+                            <strong>{formatRemainingTime(offer.endTime, fleaClock)}</strong>
+                          </div>
+                          <button
+                            className="offer-buy-button"
+                            onClick={() => setPurchaseOffer(offer)}
+                            disabled={!canBuy}
+                            title={
+                              offer.barterItems.length > 0 || !offer.currencyTemplateId
+                                ? "Compras de ofertas por troca ainda não são suportadas."
+                                : undefined
+                            }
+                          >
+                            {offer.locked ? "BLOQUEADO" : expired ? "EXPIRADO" : "COMPRAR"}
+                          </button>
+                        </article>
+                      );
+                    })
+                  )}
+                  {fleaHasMore && !fleaOffersLoading && (
+                    <button
+                      className="load-more-offers"
+                      onClick={() => selectedFleaItem && void searchFleaOffers(selectedFleaItem, fleaPage + 1, true)}
+                    >
+                      CARREGAR MAIS OFERTAS
+                    </button>
+                  )}
+                </div>
+                <div className="panel-footer">
+                  <span><i className="status-dot" /> OFERTAS RECEBIDAS DO SERVIDOR SPT</span>
+                  <span>{selectedFleaItem ? `${formatNumber(fleaOffers.length)} CARREGADAS` : "SOMENTE OFERTAS REAIS"}</span>
+                </div>
               </div>
             </section>
           )}
@@ -439,9 +1143,38 @@ export default function Home() {
           )}
         </section>
 
+        {purchaseOffer && (
+          <div className="purchase-backdrop" role="presentation">
+            <section className="purchase-dialog" role="dialog" aria-modal="true" aria-labelledby="purchase-title">
+              <div className="eyebrow">TRANSAÇÃO NO SERVIDOR SPT</div>
+              <h2 id="purchase-title">CONFIRMAR COMPRA</h2>
+              <p>
+                Comprar <strong>{purchaseOffer.itemName}</strong>
+                {purchaseOffer.itemCount > 1 && ` · ${formatNumber(purchaseOffer.itemCount)} unidades`}
+                {" "}de <strong>{purchaseOffer.seller}</strong>?
+              </p>
+              <div className="purchase-total">
+                <span>PREÇO TOTAL</span>
+                <strong>
+                  {currenciesByTemplate[purchaseOffer.currencyTemplateId ?? ""]?.symbol ?? ""}
+                  {purchaseOffer.price === null ? "—" : formatNumber(purchaseOffer.price)} {purchaseOffer.currencyLabel}
+                </strong>
+              </div>
+              <div className="purchase-actions">
+                <button className="secondary-button" onClick={() => setPurchaseOffer(null)} disabled={purchasingOffer}>
+                  CANCELAR
+                </button>
+                <button className="primary-button" onClick={() => void confirmFleaPurchase()} disabled={purchasingOffer}>
+                  {purchasingOffer ? "ENVIANDO AO SPT…" : "CONFIRMAR COMPRA"}
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+
         <footer className="statusbar">
           <span><b>SPT MARKET</b> <i>◆</i> WEB CLIENT</span>
-          <span className="statusbar-center"><i className="status-dot" /> CONEXÃO LOCAL · SOMENTE LEITURA</span>
+          <span className="statusbar-center"><i className="status-dot" /> CONEXÃO LOCAL · COMPRAS VIA SPT</span>
           <span>BUILD 0.1.0</span>
         </footer>
       </section>

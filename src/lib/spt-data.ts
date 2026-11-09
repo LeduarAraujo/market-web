@@ -10,6 +10,18 @@ export type PlayerProfile = {
   faction: string;
 };
 
+type RawHandbook = {
+  Categories?: Array<{
+    Id?: string;
+    ParentId?: string | null;
+    Order?: string;
+  }>;
+  Items?: Array<{
+    Id?: string;
+    ParentId?: string;
+  }>;
+};
+
 export type CurrencyBalances = {
   rubles: number;
   dollars: number;
@@ -35,9 +47,35 @@ export type StashItem = {
 export type TraderSummary = {
   id: string;
   name: string;
+  nickname: string;
   loyaltyLevel: number;
   standing: number;
   unlocked: boolean;
+};
+
+export type FleaCategory = {
+  id: string;
+  name: string;
+  parentId: string | null;
+  itemCount: number;
+  order: number;
+};
+
+export type FleaCatalogItem = {
+  id: string;
+  name: string;
+  shortName: string;
+  categoryId: string;
+};
+
+export type FleaCatalog = {
+  categories: FleaCategory[];
+  items: FleaCatalogItem[];
+};
+
+export type RagfairPaymentItem = {
+  id: string;
+  count: number;
 };
 
 type RawProfile = {
@@ -84,6 +122,10 @@ type RawTrader = {
   loyaltyLevels?: unknown[];
 };
 
+type RawTraderSettings = RawTrader & {
+  _id?: string;
+};
+
 type HttpConfig = {
   ip?: string;
   port?: number;
@@ -104,6 +146,7 @@ type SptResponse = {
 const profileIdPattern = /^[a-f\d]{24}$/i;
 const itemTemplatesCache = new Map<string, RawTemplate>();
 let localeCache: Record<string, string> | undefined;
+let fleaCatalogCache: Promise<FleaCatalog> | undefined;
 
 function getSptPaths() {
   const root = path.resolve(process.env.SPT_ROOT ?? path.resolve(process.cwd(), ".."));
@@ -112,6 +155,7 @@ function getSptPaths() {
   return {
     profiles: path.join(runtime, "user", "profiles"),
     templates: path.join(runtime, "SPT_Data", "database", "templates", "items.json"),
+    handbook: path.join(runtime, "SPT_Data", "database", "templates", "handbook.json"),
     locale: path.join(runtime, "SPT_Data", "database", "locales", "global", "en.json"),
     traders: path.join(runtime, "SPT_Data", "database", "traders"),
     httpConfig: path.join(runtime, "SPT_Data", "configs", "http.json"),
@@ -187,6 +231,114 @@ export async function getProfileCurrencies(profileId: string): Promise<CurrencyB
   }
 
   return balances;
+}
+
+export async function getFleaCatalog(): Promise<FleaCatalog> {
+  fleaCatalogCache ??= (async () => {
+    const [handbook, templates, locale] = await Promise.all([
+      readJson<RawHandbook>(getSptPaths().handbook),
+      getTemplates(),
+      getLocale(),
+    ]);
+    const categoryRows = (handbook.Categories ?? []).filter(
+      (category): category is Required<Pick<typeof category, "Id">> & typeof category =>
+        typeof category.Id === "string",
+    );
+    const categoriesById = new Map(categoryRows.map((category) => [category.Id, category]));
+    const items = (handbook.Items ?? [])
+      .filter(
+        (item): item is Required<Pick<typeof item, "Id" | "ParentId">> & typeof item =>
+          typeof item.Id === "string" && typeof item.ParentId === "string",
+      )
+      .map((item) => {
+        const template = templates.get(item.Id);
+        const name = locale[`${item.Id} Name`] ?? template?._name ?? item.Id;
+        return {
+          id: item.Id,
+          name: name.replaceAll("_", " "),
+          shortName: (locale[`${item.Id} ShortName`] ?? name).replaceAll("_", " "),
+          categoryId: item.ParentId,
+        } satisfies FleaCatalogItem;
+      })
+      .sort((left, right) => left.name.localeCompare(right.name));
+
+    const itemCounts = new Map<string, number>();
+    for (const item of items) {
+      let categoryId: string | null = item.categoryId;
+      const visited = new Set<string>();
+      while (categoryId && categoriesById.has(categoryId) && !visited.has(categoryId)) {
+        visited.add(categoryId);
+        itemCounts.set(categoryId, (itemCounts.get(categoryId) ?? 0) + 1);
+        const parentId: string | null | undefined = categoriesById.get(categoryId)?.ParentId;
+        categoryId = typeof parentId === "string" ? parentId : null;
+      }
+    }
+
+    const categories = categoryRows
+      .map((category) => ({
+        id: category.Id,
+        name: locale[category.Id]?.trim() || "Outros itens",
+        parentId: typeof category.ParentId === "string" ? category.ParentId : null,
+        itemCount: itemCounts.get(category.Id) ?? 0,
+        order: Number(category.Order ?? 0),
+      }))
+      .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name));
+
+    return { categories, items };
+  })();
+
+  try {
+    return await fleaCatalogCache;
+  } catch (error) {
+    fleaCatalogCache = undefined;
+    throw error;
+  }
+}
+
+export async function getRagfairPaymentItems(
+  profileId: string,
+  currencyTemplateId: string,
+  price: number,
+): Promise<RagfairPaymentItem[]> {
+  const currencyTemplateIds = new Set([
+    "5449016a4bdc2d6f028b456f",
+    "5696686a4bdc2da3298b456a",
+    "569668774bdc2da2298b4568",
+  ]);
+  if (!currencyTemplateIds.has(currencyTemplateId) || !Number.isSafeInteger(price) || price <= 0) {
+    throw new Error("O pagamento da oferta não é uma moeda válida do flea market.");
+  }
+
+  const profile = await readProfileFile(profileId);
+  const inventoryItems = profile.characters?.pmc?.Inventory?.items ?? [];
+  let remaining = price;
+  const paymentItems: RagfairPaymentItem[] = [];
+
+  for (const item of inventoryItems) {
+    if (item._tpl !== currencyTemplateId || remaining <= 0) continue;
+
+    const itemId = item._id;
+    if (typeof itemId !== "string" || !profileIdPattern.test(itemId)) continue;
+
+    const upd =
+      typeof item.upd === "object" && item.upd !== null
+        ? (item.upd as Record<string, unknown>)
+        : undefined;
+    const stackCount = upd?.StackObjectsCount;
+    const available =
+      typeof stackCount === "number" && Number.isSafeInteger(stackCount) && stackCount > 0
+        ? stackCount
+        : 1;
+    const count = Math.min(available, remaining);
+    paymentItems.push({ id: itemId, count });
+    remaining -= count;
+  }
+
+  if (remaining > 0) {
+    throw new Error("Saldo insuficiente no perfil local para pagar esta oferta.");
+  }
+
+  return paymentItems;
 }
 
 async function getTemplates(): Promise<Map<string, RawTemplate>> {
@@ -364,6 +516,7 @@ export async function getTraders(profileId: string): Promise<TraderSummary[]> {
 
       return {
         id,
+        nickname: trader.nickname ?? "",
         name:
           trader.nickname === trader.surname
             ? trader.nickname ?? ""
@@ -375,9 +528,70 @@ export async function getTraders(profileId: string): Promise<TraderSummary[]> {
     }),
   );
 
-  return results
-    .filter((trader): trader is TraderSummary => trader !== null && trader.name.length > 0)
-    .sort((left, right) => left.name.localeCompare(right.name));
+  const tradersById = new Map(
+    results
+      .filter((trader): trader is TraderSummary => trader !== null && trader.name.length > 0)
+      .map((trader) => [trader.id, trader]),
+  );
+
+  try {
+    const sessionId = await getProfileSessionId(profileId);
+    const response = await requestSpt("/client/trading/api/traderSettings", {
+      timeoutMs: 1500,
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `PHPSESSID=${sessionId}`,
+      },
+      body: "{}",
+    });
+
+    if (response.statusCode !== 200) {
+      throw new Error(`O SPT não conseguiu carregar os dados dos comerciantes (HTTP ${response.statusCode}).`);
+    }
+
+    let responseData: unknown;
+    try {
+      responseData = JSON.parse(response.body);
+    } catch {
+      throw new Error("O SPT retornou dados inválidos para os comerciantes.");
+    }
+
+    if (
+      typeof responseData !== "object" ||
+      responseData === null ||
+      !("data" in responseData) ||
+      !Array.isArray(responseData.data)
+    ) {
+      throw new Error("O SPT retornou uma lista de comerciantes em formato inesperado.");
+    }
+
+    for (const value of responseData.data) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+      const trader = value as RawTraderSettings;
+      if (typeof trader._id !== "string" || !profileIdPattern.test(trader._id)) continue;
+
+      const existing = tradersById.get(trader._id);
+      const nickname = trader.nickname ?? existing?.nickname ?? "";
+      const name =
+        trader.nickname === trader.surname
+          ? nickname
+          : [trader.nickname, trader.surname].filter(Boolean).join(" ") || existing?.name || "";
+      if (!name) continue;
+
+      tradersById.set(trader._id, {
+        id: trader._id,
+        nickname,
+        name,
+        loyaltyLevel: existing?.loyaltyLevel ?? 0,
+        standing: existing?.standing ?? 0,
+        unlocked: existing?.unlocked ?? Boolean(trader.unlockedByDefault),
+      });
+    }
+  } catch (error) {
+    if (!isSptConnectionError(error)) throw error;
+  }
+
+  return [...tradersById.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export async function getIntegrationStatus() {

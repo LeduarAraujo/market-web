@@ -134,9 +134,79 @@ h1 { margin: 5px 0 1px; color: #f0efe7; font: 700 34px var(--display); letter-sp
 .panel-footer span:first-child { display: flex; align-items: center; gap: 7px; }
 .panel-footer .status-dot { width: 5px; height: 5px; }
 
-.market-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 15px; }
+.market-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 15px; align-items: start; }
 .market-filters { padding: 17px; display: flex; flex-direction: column; align-items: stretch; gap: 13px; }
 .market-filters .panel-title { margin-bottom: 8px; }
+.flea-browser { height: min(690px, calc(100vh - 245px)); min-height: 480px; display: flex; flex-direction: column; padding: 14px; }
+.flea-browser > .panel-title { min-height: 43px; margin-bottom: 11px; }
+.flea-browser .search-box { flex: 0 0 34px; }
+.flea-breadcrumbs { min-height: 27px; display: flex; align-items: center; gap: 3px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+.flea-breadcrumbs button { flex: 0 0 auto; border: 0; background: transparent; color: #8d978f; font: 8px var(--mono); cursor: pointer; }
+.flea-breadcrumbs button.active, .flea-breadcrumbs button:hover { color: var(--accent-bright); }
+.flea-catalog-list { min-height: 0; flex: 1; overflow: auto; margin: 0 -7px; padding: 4px 7px; scrollbar-color: #3a4441 #111617; scrollbar-width: thin; }
+.flea-category-row, .flea-item-row { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 0; border-bottom: 1px solid #252d2d; background: transparent; color: #c1c7bd; text-align: left; cursor: pointer; }
+.flea-category-row:hover, .flea-item-row:hover, .flea-item-row.selected { background: #c1a66b12; color: var(--accent-bright); }
+.flea-category-row > span:nth-child(2) { flex: 1; font-size: 10px; }
+.flea-category-row small { color: #6f7a73; font: 8px var(--mono); }
+.category-chevron { color: var(--accent); font: 17px var(--mono); }
+.flea-item-row { min-height: 42px; }
+.flea-item-row:disabled { cursor: wait; opacity: .65; }
+.flea-item-name { flex: 1; min-width: 0; overflow: hidden; color: inherit; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.flea-item-arrow { color: #748078; font: 15px var(--mono); }
+.market-item-icon { position: relative; width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; overflow: hidden; border: 1px solid #3b4440; background: radial-gradient(circle, #303735, #171c1d); color: var(--accent-bright); font: 600 8px var(--mono); }
+.market-item-icon img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #151a1b; }
+.market-item-icon.large { width: 40px; height: 40px; flex-basis: 40px; }
+.market-item-icon.offer { width: 46px; height: 46px; flex-basis: 46px; }
+.catalog-footer { min-height: 27px; display: flex; align-items: flex-end; border-top: 1px solid var(--line); color: #737d77; font: 8px var(--mono); letter-spacing: .5px; }
+.catalog-limit { padding: 10px 6px; color: #8b948e; font: 8px var(--mono); }
+.selected-market-item { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.selected-market-item > span:last-child { min-width: 0; }
+.selected-market-item strong, .selected-market-item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selected-market-item strong { max-width: 420px; color: #e2e4db; font: 600 14px var(--display); letter-spacing: .4px; }
+.selected-market-item small { margin-top: 3px; color: #76817a; font: 7px var(--mono); letter-spacing: .7px; }
+.offers-prompt { color: #818b84; font-size: 10px; }
+.offers-toolbar .text-button:disabled { cursor: not-allowed; opacity: .5; }
+.market-filters-row { display: flex; align-items: center; gap: 15px; flex-wrap: wrap; padding: 10px 15px; border-bottom: 1px solid var(--line); background: #111617; }
+.market-filters-row > label:not(.check-row) { display: flex; align-items: center; gap: 7px; color: #79837d; font: 8px var(--mono); }
+.market-filters-row .select-field { height: 29px; min-width: 100px; font-size: 9px; }
+.market-filters-row .check-row { font-size: 9px; }
+.filter-apply { margin-left: auto; padding: 7px 10px; border: 1px solid #514a38; background: #201d16; color: var(--accent-bright); font: 8px var(--mono); cursor: pointer; }
+.filter-apply:disabled { cursor: wait; opacity: .6; }
+.offers-summary { min-height: 27px; display: flex; align-items: center; padding: 0 15px; border-bottom: 1px solid #252d2d; color: #78827c; font: 8px var(--mono); letter-spacing: .7px; }
+.offers-list { min-height: 430px; max-height: calc(100vh - 365px); overflow: auto; background: #0e1314; }
+.market-offer-row { min-height: 94px; display: grid; grid-template-columns: 48px minmax(150px, 1.8fr) minmax(105px, 1fr) minmax(100px, .9fr) minmax(85px, .65fr) 92px; align-items: center; gap: 10px; padding: 9px 13px; border-bottom: 1px solid #283031; background: linear-gradient(90deg, #171c1d, #111617); }
+.market-offer-row:hover { background: linear-gradient(90deg, #202321, #151a1b); }
+.market-offer-row.unavailable { opacity: .56; }
+.offer-item-details, .offer-seller, .offer-price, .offer-expiry { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.offer-item-details strong { overflow: hidden; color: #dce0d7; font: 600 11px var(--display); text-overflow: ellipsis; white-space: nowrap; }
+.offer-item-details > span { overflow: hidden; color: #8b958e; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.offer-item-details .found-in-raid { color: #a4bd88; font: 7px var(--mono); }
+.offer-item-details .barter-details { color: #d0b979; white-space: normal; }
+.offer-seller strong { overflow: hidden; color: #cdd2c8; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.offer-seller > span { color: #7f8982; font-size: 8px; }
+.offer-seller .seller-trader { color: #d1b877; font: 7px var(--mono); }
+.offer-seller .seller-player { color: #91aa7f; font: 7px var(--mono); }
+.offer-price strong { color: #e1d09f; font: 600 14px var(--mono); white-space: nowrap; }
+.offer-price > span { color: #818b84; font: 8px var(--mono); }
+.offer-expiry > span { color: #747e78; font: 7px var(--mono); }
+.offer-expiry strong { color: #c5ccc1; font: 10px var(--mono); white-space: nowrap; }
+.offer-buy-button { min-height: 32px; border: 1px solid #81714c; background: #272319; color: var(--accent-bright); font: 8px var(--mono); cursor: pointer; }
+.offer-buy-button:hover:not(:disabled) { background: var(--accent); color: #101311; }
+.offer-buy-button:disabled { border-color: #393e3b; background: #1a1e1e; color: #727a75; cursor: not-allowed; }
+.load-more-offers { width: calc(100% - 28px); min-height: 34px; margin: 12px 14px; border: 1px solid #343d3c; background: #171d1e; color: var(--accent-bright); font: 8px var(--mono); cursor: pointer; }
+.load-more-offers:hover { border-color: var(--accent); }
+.purchase-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 18px; background: #000000b8; }
+.purchase-dialog { width: min(420px, 100%); padding: 24px; border: 1px solid #625840; background: linear-gradient(145deg, #1a2020, #101516); box-shadow: 0 22px 70px #00000090; }
+.purchase-dialog h2 { margin: 7px 0 12px; color: #f0efe7; font: 700 25px var(--display); letter-spacing: 1px; }
+.purchase-dialog p { color: #9da69f; font-size: 11px; line-height: 1.7; }
+.purchase-dialog p strong { color: #e1e4da; }
+.purchase-total { display: flex; justify-content: space-between; align-items: center; margin: 18px 0; padding: 12px; border: 1px solid #343d3c; background: #0d1213; }
+.purchase-total span { color: #7c8780; font: 8px var(--mono); }
+.purchase-total strong { color: var(--accent-bright); font: 600 15px var(--mono); }
+.purchase-actions { display: flex; justify-content: flex-end; gap: 9px; }
+.secondary-button { min-height: 38px; padding: 0 13px; border: 1px solid #3b4440; background: #171d1e; color: #b6beb5; font: 8px var(--mono); cursor: pointer; }
+.purchase-actions .primary-button { margin: 0; padding: 0 13px; }
+.purchase-actions button:disabled { cursor: wait; opacity: .6; }
 .field-label { color: #8a938e; font: 8px var(--mono); letter-spacing: 1px; margin-bottom: -8px; }
 .search-box.full { width: 100%; margin: 0; }
 .select-field { height: 34px; border: 1px solid #343d3c; background: #0c1112; color: var(--text); padding: 0 9px; font-size: 10px; }
@@ -156,7 +226,7 @@ h1 { margin: 5px 0 1px; color: #f0efe7; font: 700 34px var(--display); letter-sp
 .text-button { border: 0; background: transparent; color: var(--accent); font: 9px var(--mono); letter-spacing: .5px; cursor: pointer; }
 .text-button:hover { color: var(--accent-bright); }
 .offers-table-head { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 20px; gap: 8px; padding: 11px 15px; border-bottom: 1px solid #283031; color: #747f79; font: 8px var(--mono); letter-spacing: .7px; }
-.market-empty { flex: 1; min-height: 380px; display: flex; align-items: center; justify-content: center; flex-direction: column; padding: 25px; text-align: center; }
+.market-empty { min-height: 380px; display: flex; align-items: center; justify-content: center; flex-direction: column; padding: 25px; text-align: center; }
 .empty-orbit { width: 58px; height: 58px; display: grid; place-items: center; border: 1px solid #4d493b; border-radius: 50%; color: var(--accent); font-size: 28px; box-shadow: 0 0 30px #c1a66b0c; }
 .market-empty strong { margin-top: 19px; color: #c2c8bc; font: 600 15px var(--display); letter-spacing: 1.1px; }
 .market-empty p { max-width: 360px; color: #7d8781; font-size: 10px; line-height: 1.7; }
@@ -198,7 +268,7 @@ h1 { margin: 5px 0 1px; color: #f0efe7; font: 700 34px var(--display); letter-sp
   .currency-bar { justify-content: flex-start; padding: 5px 16px; }
   .currency-heading { display: none; }
   .content { padding: 22px 16px; }
-  .market-layout { grid-template-columns: 230px minmax(0, 1fr); }
+  .market-layout { grid-template-columns: 270px minmax(0, 1fr); }
   .inventory-meta { display: none; }
 }
 @media (max-width: 640px) {
@@ -235,6 +305,21 @@ h1 { margin: 5px 0 1px; color: #f0efe7; font: 700 34px var(--display); letter-sp
   .item-name { font-size: 7px; }
   .panel-footer { gap: 5px; font-size: 6px; }
   .market-layout { grid-template-columns: 1fr; }
+  .flea-browser { height: 390px; min-height: 330px; }
+  .market-offer-row { grid-template-columns: 38px minmax(0, 1fr) auto; gap: 7px; padding: 9px; }
+  .market-item-icon.offer { width: 36px; height: 36px; flex-basis: 36px; }
+  .offer-item-details { grid-column: 2; grid-row: 1; }
+  .offer-seller { grid-column: 2; grid-row: 2; }
+  .offer-price { grid-column: 3; grid-row: 1; text-align: right; }
+  .offer-price strong { font-size: 11px; }
+  .offer-expiry { grid-column: 2; grid-row: 3; }
+  .offer-buy-button { grid-column: 3; grid-row: 3; }
+  .market-filters-row { gap: 8px; padding: 9px; }
+  .market-filters-row > label:not(.check-row) { gap: 4px; font-size: 7px; }
+  .market-filters-row .select-field { min-width: 85px; }
+  .selected-market-item strong { max-width: 180px; font-size: 12px; }
+  .offers-toolbar { padding: 0 9px; }
+  .purchase-dialog { padding: 18px; }
   .market-filters { padding: 12px; }
   .market-filters .panel-title { margin-bottom: 0; }
   .offers-panel { min-height: 430px; }
