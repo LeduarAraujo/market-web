@@ -16,7 +16,7 @@ export async function GET(
   }
 
   try {
-    return NextResponse.json({ items: await getStash(selectedProfileId) });
+    return NextResponse.json(await getStash(selectedProfileId));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Não foi possível ler o stash.";
     return NextResponse.json({ error: message }, { status: 503 });

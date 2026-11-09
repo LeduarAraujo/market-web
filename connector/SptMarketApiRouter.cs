@@ -6,6 +6,8 @@ using SPTarkov.Server.Core.DI;
 using SPTarkov.Server.Core.Helpers.Server;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common;
+using SPTarkov.Server.Core.Models.Eft.Inventory;
+using SPTarkov.Server.Core.Models.Eft.ItemEvent;
 using SPTarkov.Server.Core.Models.Eft.Ragfair;
 using SPTarkov.Server.Core.Models.Eft.Trade;
 using SPTarkov.Server.Core.Models.Utils;
@@ -21,8 +23,9 @@ public sealed class SptMarketApiRouter : StaticRouter
         JsonUtil json,
         SaveServer saves,
         RagfairCallbacks ragfair,
-        TradeCallbacks trades)
-        : base(json, BuildRoutes(json, saves, ragfair, trades))
+        TradeCallbacks trades,
+        InventoryCallbacks inventory)
+        : base(json, BuildRoutes(json, saves, ragfair, trades, inventory))
     {
     }
 
@@ -30,7 +33,8 @@ public sealed class SptMarketApiRouter : StaticRouter
         JsonUtil json,
         SaveServer saves,
         RagfairCallbacks ragfair,
-        TradeCallbacks trades)
+        TradeCallbacks trades,
+        InventoryCallbacks inventory)
     {
         return
         [
@@ -50,7 +54,8 @@ public sealed class SptMarketApiRouter : StaticRouter
                             "flea.offer.extend",
                             "flea.offer.find",
                             "flea.buy",
-                            "trader.trade"
+                            "trader.trade",
+                            "stash.move"
                         }
                     }))),
             new RouteAction<SearchRequestData>(
@@ -125,8 +130,47 @@ public sealed class SptMarketApiRouter : StaticRouter
                     var payload = DeserializePayload<ProcessBaseTradeRequestData>(json, request);
                     return Serialize(json, await trades.ProcessTrade(pmc, payload, sessionId));
                 },
+                typeof(MarketPayloadRequestData)),
+            new RouteAction(
+                "/spt-market/stash/move",
+                async (url, request, sessionId, output, cancellationToken) =>
+                {
+                    var pmc = RequireProfile(saves, sessionId);
+                    var payload = DeserializePayload<InventoryMoveRequestData>(json, request);
+                    var response = new ItemEventRouterResponse();
+                    var result = await inventory.MoveItem(pmc, payload, sessionId, response);
+                    var serialized = Serialize(json, result);
+                    if (!HasWarnings(serialized))
+                    {
+                        await saves.SaveProfileAsync(sessionId, cancellationToken);
+                    }
+
+                    return serialized;
+                },
                 typeof(MarketPayloadRequestData))
         ];
+    }
+
+    private static bool HasWarnings(string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        var warningsProperty = document.RootElement.ValueKind == JsonValueKind.Object
+            ? document.RootElement.EnumerateObject()
+                .FirstOrDefault(property => string.Equals(property.Name, "warnings", StringComparison.OrdinalIgnoreCase))
+            : default;
+        if (warningsProperty.Value.ValueKind == JsonValueKind.Undefined)
+        {
+            return false;
+        }
+
+        return warningsProperty.Value.ValueKind switch
+        {
+            JsonValueKind.Array => warningsProperty.Value.GetArrayLength() > 0,
+            JsonValueKind.Object => warningsProperty.Value.EnumerateObject().Any(),
+            JsonValueKind.String => !string.IsNullOrWhiteSpace(warningsProperty.Value.GetString()),
+            JsonValueKind.True => true,
+            _ => false
+        };
     }
 
     private static T DeserializePayload<T>(JsonUtil json, IRequestData request)

@@ -117,15 +117,19 @@ h1 { margin: 5px 0 1px; color: #f0efe7; font: 700 34px var(--display); letter-sp
 .search-box button { border: 0; background: transparent; color: #929a95; cursor: pointer; font-size: 18px; }
 .icon-button { width: 34px; height: 34px; border: 1px solid #343d3c; background: #151a1a; color: var(--accent); font-size: 22px; cursor: pointer; }
 .icon-button:hover { border-color: var(--accent); }
-.inventory-grid-wrap { position: relative; min-height: 460px; max-height: calc(100vh - 310px); overflow: auto; padding: 15px; background-color: #0d1213; background-image: linear-gradient(#ffffff08 1px, transparent 1px), linear-gradient(90deg, #ffffff08 1px, transparent 1px); background-size: 48px 48px; }
-.stash-grid { display: grid; grid-template-columns: repeat(10, minmax(50px, 1fr)); grid-auto-rows: 48px; gap: 2px; min-height: 100%; align-content: start; }
-.stash-item { min-width: 0; position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; padding: 5px 7px; border: 1px solid #525447; background: linear-gradient(140deg, #34382e, #252b29 70%); color: #e5e3d8; box-shadow: inset 0 0 15px #0000002a; }
-.stash-item:nth-child(3n) { background: linear-gradient(140deg, #303735, #202729 70%); }
-.stash-item:nth-child(5n) { background: linear-gradient(140deg, #3b382e, #242925 70%); }
-.item-index { color: var(--accent-bright); font: 600 9px var(--mono); letter-spacing: .5px; }
-.item-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; font-size: 9px; font-weight: 600; text-shadow: 0 1px 3px #000; }
-.item-count { position: absolute; top: 4px; right: 5px; color: #f4e3a8; font: 9px var(--mono); }
-.item-coord { position: absolute; bottom: 3px; right: 4px; color: #a5aea3; font: 7px var(--mono); }
+.inventory-grid-wrap { position: relative; min-height: 460px; max-height: calc(100vh - 310px); overflow: auto; padding: 15px; background-color: #0d1213; }
+.stash-grid { display: grid; width: max-content; align-content: start; }
+.stash-cell { box-sizing: border-box; border: 1px solid #ffffff0d; background: #11171855; }
+.stash-item { box-sizing: border-box; min-width: 0; min-height: 0; position: relative; z-index: 1; overflow: hidden; display: flex; align-items: center; justify-content: center; border: 1px solid #777354; background: linear-gradient(140deg, #34382e99, #252b2999 70%); color: #e5e3d8; box-shadow: inset 0 0 15px #00000055; cursor: grab; }
+.stash-item:active { cursor: grabbing; }
+.stash-overflow-list { width: max-content; max-width: 100%; margin-top: 16px; padding: 10px; border: 1px solid #8a6743; background: #221b14; }
+.stash-overflow-list > p { margin: 0 0 9px; color: #dbb984; font: 8px var(--mono); letter-spacing: .5px; }
+.stash-overflow-items { display: flex; flex-wrap: wrap; gap: 8px; }
+.stash-overflow-item { width: 240px; height: 64px; flex: 0 1 240px; }
+.stash-item-image { position: absolute; inset: 2px; width: calc(100% - 4px); height: calc(100% - 4px); object-fit: contain; opacity: .8; pointer-events: none; }
+.item-index { position: absolute; top: 3px; left: 4px; z-index: 1; color: var(--accent-bright); font: 600 8px var(--mono); letter-spacing: .5px; text-shadow: 0 1px 3px #000; }
+.item-name { position: absolute; right: 0; bottom: 0; left: 0; z-index: 1; overflow: hidden; padding: 3px 4px; background: #0b0f10bf; color: #f0eee3; text-overflow: ellipsis; white-space: nowrap; font-size: 8px; font-weight: 600; text-shadow: 0 1px 3px #000; }
+.item-count { position: absolute; top: 4px; right: 5px; z-index: 2; color: #f4e3a8; font: 9px var(--mono); text-shadow: 0 1px 3px #000; }
 .empty-state { min-height: 320px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px; color: #69736e; font: 10px var(--mono); letter-spacing: 1.3px; }
 .empty-cross { color: #58615b; font-size: 24px; }
 .loader { width: 19px; height: 19px; border: 2px solid #47504b; border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
@@ -302,7 +306,7 @@ h1 { margin: 5px 0 1px; color: #f0efe7; font: 700 34px var(--display); letter-sp
   .panel-title { min-width: 0; }
   .search-box { min-width: 0; width: 145px; }
   .inventory-grid-wrap { min-height: 440px; padding: 8px; }
-  .stash-grid { grid-template-columns: repeat(10, minmax(27px, 1fr)); grid-auto-rows: 42px; }
+  .stash-grid { transform-origin: top left; }
   .stash-item { padding: 3px; }
   .item-name { font-size: 7px; }
   .panel-footer { gap: 5px; font-size: 6px; }

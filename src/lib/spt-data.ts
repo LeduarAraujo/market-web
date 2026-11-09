@@ -44,6 +44,12 @@ export type StashItem = {
   category: string;
 };
 
+export type StashInventory = {
+  items: StashItem[];
+  gridWidth: number;
+  gridHeight: number;
+};
+
 export type TraderSummary = {
   id: string;
   name: string;
@@ -135,6 +141,12 @@ type RawTemplate = {
     StackMaxSize?: number;
     CanSellOnRagfair?: boolean;
     MaxHpResource?: number;
+    Grids?: Array<{
+      _props?: {
+        cellsH?: number;
+        cellsV?: number;
+      };
+    }>;
   };
 };
 
@@ -430,7 +442,43 @@ async function getLocale(): Promise<Record<string, string>> {
   return localeCache;
 }
 
-export async function getStash(profileId: string): Promise<StashItem[]> {
+function getStashGridSize(
+  stashTemplate: RawTemplate | undefined,
+  items: Array<Record<string, unknown>>,
+  stashId: string,
+  templates: Map<string, RawTemplate>,
+) {
+  const grid = stashTemplate?._props?.Grids?.[0]?._props;
+  const width = 10;
+  let height = Number.isSafeInteger(grid?.cellsV) && Number(grid?.cellsV) > 0
+    ? Number(grid?.cellsV)
+    : 68;
+
+  for (const item of items) {
+    if (item.parentId !== stashId || typeof item.location !== "object" || item.location === null) {
+      continue;
+    }
+
+    const location = item.location as Record<string, unknown>;
+    const x = location.x;
+    const y = location.y;
+    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || typeof item._tpl !== "string") {
+      continue;
+    }
+
+    const template = templates.get(item._tpl);
+    const rotated = location.r === "Vertical";
+    const itemHeight = Number(rotated ? template?._props?.Width ?? 1 : template?._props?.Height ?? 1);
+    height = Math.max(height, Number(y) + itemHeight);
+  }
+
+  return {
+    width,
+    height: Math.min(height, 150),
+  };
+}
+
+export async function getStash(profileId: string): Promise<StashInventory> {
   const profile = await readProfileFile(profileId);
   const inventory = profile.characters?.pmc?.Inventory;
 
@@ -439,7 +487,10 @@ export async function getStash(profileId: string): Promise<StashItem[]> {
   }
 
   const [templates, locale] = await Promise.all([getTemplates(), getLocale()]);
-  return inventory.items
+  const stashItem = inventory.items.find((item) => item._id === inventory.stash);
+  const stashTemplate = typeof stashItem?._tpl === "string" ? templates.get(stashItem._tpl) : undefined;
+  const gridSize = getStashGridSize(stashTemplate, inventory.items, inventory.stash, templates);
+  const items = inventory.items
     .filter((item) => item.parentId === inventory.stash)
     .map((item) => {
       const id = String(item._id ?? "");
@@ -472,6 +523,58 @@ export async function getStash(profileId: string): Promise<StashItem[]> {
         category: template?._parent ?? "unknown",
       } satisfies StashItem;
     });
+
+  return { items, gridWidth: gridSize.width, gridHeight: gridSize.height };
+}
+
+export async function getStashMoveRequest(
+  profileId: string,
+  itemId: string,
+  x: number,
+  y: number,
+) {
+  if (!profileIdPattern.test(itemId) || !Number.isSafeInteger(x) || !Number.isSafeInteger(y) || x < 0 || y < 0) {
+    throw new Error("Informe um item e uma posição válidos.");
+  }
+
+  const profile = await readProfileFile(profileId);
+  const inventory = profile.characters?.pmc?.Inventory;
+  const item = inventory?.items?.find((entry) => entry._id === itemId);
+
+  if (!inventory?.stash || !item || item.parentId !== inventory.stash) {
+    throw new Error("O item informado não está diretamente no stash do perfil selecionado.");
+  }
+
+  const templates = await getTemplates();
+  const stashItem = inventory.items?.find((entry) => entry._id === inventory.stash);
+  const stashTemplate = typeof stashItem?._tpl === "string" ? templates.get(stashItem._tpl) : undefined;
+  const gridSize = getStashGridSize(stashTemplate, inventory.items ?? [], inventory.stash, templates);
+  const location =
+    typeof item.location === "object" && item.location !== null
+      ? (item.location as Record<string, unknown>)
+      : {};
+  const template = typeof item._tpl === "string" ? templates.get(item._tpl) : undefined;
+  const rotated = location.r === "Vertical";
+  const width = Number(rotated ? template?._props?.Height ?? 1 : template?._props?.Width ?? 1);
+  const height = Number(rotated ? template?._props?.Width ?? 1 : template?._props?.Height ?? 1);
+
+  if (x + width > gridSize.width || y + height > gridSize.height) {
+    throw new Error("O item não cabe na posição escolhida dentro do stash.");
+  }
+
+  return {
+    Action: "Move",
+    item: item._id,
+    to: {
+      id: inventory.stash,
+      container: item.slotId,
+      location: {
+        x,
+        y,
+        r: rotated ? "Vertical" : "Horizontal",
+      },
+    },
+  };
 }
 
 export async function getProfileSessionId(profileId: string): Promise<string> {
@@ -802,6 +905,7 @@ export async function getIntegrationStatus() {
         offerManagement: false,
         traderTransactions: false,
         connectorInstalled: false,
+        stashMove: false,
         serverReachable: true,
         message: "Servidor SPT online; conector do mercado não encontrado.",
       };
@@ -820,6 +924,14 @@ export async function getIntegrationStatus() {
       result.connector === "spt-market" &&
       "protocol" in result &&
       result.protocol === 1;
+    const capabilities =
+      typeof result === "object" &&
+      result !== null &&
+      "capabilities" in result &&
+      Array.isArray(result.capabilities)
+        ? result.capabilities.filter((capability): capability is string => typeof capability === "string")
+        : [];
+    const stashMove = connectorInstalled && capabilities.includes("stash.move");
 
     return {
       profileRead: true,
@@ -829,9 +941,12 @@ export async function getIntegrationStatus() {
       offerManagement: connectorInstalled,
       traderTransactions: connectorInstalled,
       connectorInstalled,
+      stashMove,
       serverReachable: true,
       message: connectorInstalled
-        ? "Conector SPT encontrado; operações ainda dependem de requisições validadas."
+        ? stashMove
+          ? "Conector SPT encontrado."
+          : "Atualize o conector do servidor para habilitar a movimentação do stash."
         : "Resposta do servidor SPT não reconhecida como conector do mercado.",
     };
   } catch (error) {
@@ -844,6 +959,7 @@ export async function getIntegrationStatus() {
         offerManagement: false,
         traderTransactions: false,
         connectorInstalled: false,
+        stashMove: false,
         serverReachable: false,
         message: "Servidor SPT local está offline.",
       };

@@ -1,9 +1,10 @@
 # SPT Market Web
 
 Aplicação web local para consultar perfis, stash, moedas e comerciantes do SPT.
-Perfil, stash e moedas são lidos localmente. Compras são enviadas ao servidor SPT
-somente após confirmação explícita; o painel não escreve diretamente nos arquivos
-do jogo ou do perfil.
+Perfil, stash e moedas são lidos localmente. Movimentações no stash são enviadas
+ao conector e processadas pelo sistema nativo de inventário do SPT, que salva a
+alteração no perfil; o painel não edita diretamente o arquivo JSON. Compras são
+enviadas ao servidor SPT somente após confirmação explícita.
 
 ## Tutorial de instalação e execução
 
@@ -12,7 +13,7 @@ do jogo ou do perfil.
 - Windows com uma instalação funcional do SPT 4.1.6.
 - Node.js 20.9 ou superior e npm.
 - O conector pré-compilado incluído neste projeto é opcional para as telas de
-  leitura; instale-o somente para habilitar a comunicação com o servidor SPT.
+  leitura; instale-o para mover itens no stash e habilitar operações do Flea.
 - .NET SDK 10 somente se quiser recompilar o conector em vez de usar a DLL
   incluída.
 
@@ -68,7 +69,11 @@ PERFIL** para iniciar a sessão; então o painel carrega stash, comerciantes,
 catálogo do flea e saldos agregados de **rublos, dólares, euros e GP Coins**.
 A sessão selecionada é mantida em um cookie local `HttpOnly` por até 30 dias.
 Use **SAIR** para encerrar a sessão neste navegador. O painel lê os dados do
-perfil local; ele não corrige nem grava arquivos do perfil.
+perfil local. No stash, arraste um item para uma posição livre. O conector envia
+a movimentação ao sistema de inventário do SPT, que valida a posição e salva a
+alteração no perfil. A grade do stash mantém 10 colunas; itens já salvos fora
+dessa área são destacados abaixo da grade para que possam ser reposicionados.
+As dimensões e a orientação dos itens seguem os dados do perfil.
 
 Use o botão de atualizar do inventário para reler os dados. Se você acabou de
 jogar, atualize após encerrar ou salvar a sessão para consultar o perfil

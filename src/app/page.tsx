@@ -6,6 +6,7 @@ import type {
   FleaCatalog,
   FleaCatalogItem,
   PlayerProfile,
+  StashInventory,
   StashItem,
   TraderSummary,
 } from "@/lib/spt-data";
@@ -19,6 +20,7 @@ type Integration = {
   offerManagement: boolean;
   traderTransactions: boolean;
   connectorInstalled: boolean;
+  stashMove: boolean;
   message: string;
 };
 
@@ -229,6 +231,9 @@ export default function Home() {
   const [profiles, setProfiles] = useState<PlayerProfile[]>([]);
   const [profileId, setProfileId] = useState("");
   const [items, setItems] = useState<StashItem[]>([]);
+  const [stashGridWidth, setStashGridWidth] = useState(10);
+  const [stashGridHeight, setStashGridHeight] = useState(68);
+  const [movingStashItem, setMovingStashItem] = useState(false);
   const [traders, setTraders] = useState<TraderSummary[]>([]);
   const [currencies, setCurrencies] = useState<CurrencyBalances | null>(null);
   const [fleaCatalog, setFleaCatalog] = useState<FleaCatalog>({ categories: [], items: [] });
@@ -396,7 +401,10 @@ export default function Home() {
       if (!stashResponse.ok) throw new Error(stashResult.error ?? "Falha ao carregar stash.");
       if (!tradersResponse.ok) throw new Error(tradersResult.error ?? "Falha ao carregar comerciantes.");
       if (!currenciesResponse.ok) throw new Error(currenciesResult.error ?? "Falha ao carregar moedas.");
-      setItems(stashResult.items as StashItem[]);
+      const stash = stashResult as StashInventory;
+      setItems(stash.items);
+      setStashGridWidth(stash.gridWidth);
+      setStashGridHeight(stash.gridHeight);
       setTraders(tradersResult.traders as TraderSummary[]);
       setCurrencies(currenciesResult.currencies as CurrencyBalances);
     } catch (cause) {
@@ -408,6 +416,43 @@ export default function Home() {
       setLoadingData(false);
     }
   }, [profileId]);
+
+  const moveStashItem = useCallback(async (itemId: string, x: number, y: number) => {
+    if (!profileId || movingStashItem) return;
+    setMovingStashItem(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const response = await fetch(`/api/profiles/${profileId}/stash/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId, x, y }),
+      });
+      const result: unknown = await response.json();
+      const resultRecord = asRecord(result);
+      const warnings = Object.entries(resultRecord ?? {}).find(
+        ([key]) => key.toLowerCase() === "warnings",
+      )?.[1];
+      const hasWarnings =
+        (Array.isArray(warnings) && warnings.length > 0) ||
+        (asRecord(warnings) !== null && Object.keys(asRecord(warnings) ?? {}).length > 0);
+
+      if (!response.ok || hasWarnings) {
+        throw new Error(
+          firstString(resultRecord ?? {}, "error", "message") ||
+            "O servidor SPT não aceitou essa posição para o item.",
+        );
+      }
+
+      await loadProfileData();
+      setNotice("Posição do item salva no perfil SPT.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não foi possível mover o item no stash.");
+    } finally {
+      setMovingStashItem(false);
+    }
+  }, [loadProfileData, movingStashItem, profileId]);
 
   useEffect(() => {
     void loadProfileData();
@@ -598,6 +643,28 @@ export default function Home() {
         item.shortName.toLocaleLowerCase("pt-BR").includes(query),
     );
   }, [items, search]);
+  const { gridItems, outOfGridItems } = useMemo(() => {
+    const positionedItems: Array<{ item: StashItem; x: number; y: number }> = [];
+    const outOfBoundsItems: StashItem[] = [];
+
+    filteredItems.forEach((item, index) => {
+      const x = item.x ?? index % stashGridWidth;
+      const y = item.y ?? Math.floor(index / stashGridWidth);
+      const fitsGrid =
+        x >= 0 &&
+        y >= 0 &&
+        x + item.width <= stashGridWidth &&
+        y + item.height <= stashGridHeight;
+
+      if (fitsGrid) {
+        positionedItems.push({ item, x, y });
+      } else {
+        outOfBoundsItems.push(item);
+      }
+    });
+
+    return { gridItems: positionedItems, outOfGridItems: outOfBoundsItems };
+  }, [filteredItems, stashGridHeight, stashGridWidth]);
 
   async function requestMarketAction(operation: string) {
     setNotice("");
@@ -860,7 +927,7 @@ export default function Home() {
                 <button className="icon-button" aria-label="Atualizar dados do perfil" onClick={() => void loadProfileData()}>↻</button>
               </div>
               <div className="inventory-grid-wrap">
-                {loadingData ? (
+                {loadingData || movingStashItem ? (
                   <div className="empty-state"><span className="loader" />LENDO PERFIL LOCAL…</div>
                 ) : filteredItems.length === 0 ? (
                   <div className="empty-state">
@@ -868,24 +935,131 @@ export default function Home() {
                     {items.length === 0 ? "NENHUM ITEM NO STASH" : "NENHUM ITEM ENCONTRADO"}
                   </div>
                 ) : (
-                  <div className="stash-grid">
-                    {filteredItems.map((item, index) => (
+                  <>
+                  <div
+                    className="stash-grid"
+                    role="grid"
+                    aria-label={`Grade do stash com ${stashGridWidth} colunas e ${stashGridHeight} linhas`}
+                    style={{
+                      gridTemplateColumns: `repeat(${stashGridWidth}, 48px)`,
+                      gridTemplateRows: `repeat(${stashGridHeight}, 48px)`,
+                    }}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (search.trim()) return;
+                      const itemId = event.dataTransfer.getData("text/plain");
+                      const bounds = event.currentTarget.getBoundingClientRect();
+                      const x = Math.floor((event.clientX - bounds.left) / 48);
+                      const y = Math.floor((event.clientY - bounds.top) / 48);
+                      if (
+                        itemId &&
+                        x >= 0 &&
+                        x < stashGridWidth &&
+                        y >= 0 &&
+                        y < stashGridHeight
+                      ) {
+                        void moveStashItem(itemId, x, y);
+                      }
+                    }}
+                  >
+                    {Array.from({ length: stashGridWidth * stashGridHeight }, (_, index) => (
+                      <div
+                        className="stash-cell"
+                        key={`cell-${index}`}
+                        role="gridcell"
+                        aria-label={`Espaço ${index % stashGridWidth + 1}, ${Math.floor(index / stashGridWidth) + 1}`}
+                        style={{
+                          gridColumn: `${index % stashGridWidth + 1}`,
+                          gridRow: `${Math.floor(index / stashGridWidth) + 1}`,
+                        }}
+                      />
+                    ))}
+                    {gridItems.map(({ item, x, y }) => {
+                      return (
                       <article
                         className="stash-item"
                         key={item.id}
-                        style={{
-                          gridColumn: `${Math.min(10, Math.max(1, (item.x ?? (index % 10)) + 1))} / span ${Math.min(item.width, 10)}`,
-                          gridRow: `${(item.y ?? Math.floor(index / 10)) + 1} / span ${Math.min(item.height, 4)}`,
+                        role="gridcell"
+                        draggable={!search.trim()}
+                        onDragStart={(event) => {
+                          event.dataTransfer.setData("text/plain", item.id);
+                          event.dataTransfer.effectAllowed = "move";
                         }}
-                        title={`${item.name}${item.stackCount > 1 ? ` × ${item.stackCount}` : ""}`}
+                        style={{
+                          gridColumn: `${x + 1} / span ${item.width}`,
+                          gridRow: `${y + 1} / span ${item.height}`,
+                        }}
+                        title={`${item.name} · ${item.width}×${item.height}${item.rotated ? " · Vertical" : " · Horizontal"}${item.stackCount > 1 ? ` · ×${item.stackCount}` : ""}`}
                       >
                         <span className="item-index">{item.shortName.slice(0, 2).toUpperCase()}</span>
+                        <img
+                          className="stash-item-image"
+                          src={`https://assets.tarkov.dev/${item.templateId}-image.webp`}
+                          alt={item.name}
+                          draggable={false}
+                          loading="lazy"
+                          onError={(event) => {
+                            const image = event.currentTarget;
+                            if (image.dataset.fallbackApplied !== "true") {
+                              image.dataset.fallbackApplied = "true";
+                              image.src = `https://assets.tarkov.dev/${item.templateId}-icon.webp`;
+                            } else {
+                              image.style.display = "none";
+                            }
+                          }}
+                        />
                         <span className="item-name">{item.name}</span>
                         {item.stackCount > 1 && <span className="item-count">×{formatNumber(item.stackCount)}</span>}
-                        <span className="item-coord">{item.templateId.slice(0, 6)}</span>
                       </article>
-                    ))}
+                      );
+                    })}
                   </div>
+                  {outOfGridItems.length > 0 && (
+                    <div className="stash-overflow-list">
+                      <p>
+                        {outOfGridItems.length} ITEM(NS) FORA DA GRADE DE 10 COLUNAS — ARRASTE PARA UMA POSIÇÃO LIVRE
+                      </p>
+                      <div className="stash-overflow-items">
+                        {outOfGridItems.map((item) => (
+                          <article
+                            className="stash-item stash-overflow-item"
+                            key={item.id}
+                            draggable={!search.trim()}
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData("text/plain", item.id);
+                              event.dataTransfer.effectAllowed = "move";
+                            }}
+                            title={`${item.name} · ${item.width}×${item.height}${item.rotated ? " · Vertical" : " · Horizontal"}`}
+                          >
+                            <span className="item-index">{item.shortName.slice(0, 2).toUpperCase()}</span>
+                            <img
+                              className="stash-item-image"
+                              src={`https://assets.tarkov.dev/${item.templateId}-image.webp`}
+                              alt={item.name}
+                              draggable={false}
+                              loading="lazy"
+                              onError={(event) => {
+                                const image = event.currentTarget;
+                                if (image.dataset.fallbackApplied !== "true") {
+                                  image.dataset.fallbackApplied = "true";
+                                  image.src = `https://assets.tarkov.dev/${item.templateId}-icon.webp`;
+                                } else {
+                                  image.style.display = "none";
+                                }
+                              }}
+                            />
+                            <span className="item-name">{item.name}</span>
+                            {item.stackCount > 1 && <span className="item-count">×{formatNumber(item.stackCount)}</span>}
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  </>
                 )}
               </div>
               <div className="panel-footer">
